@@ -59,6 +59,23 @@ Important: Firebase is authentication only. Do not configure Firestore or Fireba
 3. Test Google/email login, add a brand source, create a review, revise it, record a human decision, refresh the page, and confirm the records persist.
 4. Upload a small PDF or DOCX and confirm the source appears.
 
+## Firebase troubleshooting
+
+After deployment, open `https://YOUR-VERCEL-DOMAIN/api/health`. Read these fields:
+
+| Field | Meaning |
+|---|---|
+| `firebaseWeb` | All five public Firebase Web App values are present. |
+| `firebaseAdmin` | The server successfully initialized Firebase Admin. |
+| `firebaseAuth` | Both Web App and Admin configuration are ready. |
+| `firebaseStatus` | Diagnostic code such as `missing_credentials`, `invalid_json`, `invalid_service_account`, or `project_mismatch`. |
+| `firebaseMessage` | Safe troubleshooting guidance; it never includes the private key. |
+| `missingFirebaseWebFields` | Names of any missing Web App fields. |
+
+If `firebaseWeb` is true but `firebaseAdmin` is false, check `FIREBASE_SERVICE_ACCOUNT_JSON`: paste the complete JSON file contents (not its filename or a download link), make sure it belongs to the same Firebase project as `FIREBASE_PROJECT_ID`, save the variable for the Production environment, and redeploy. Never share this JSON with anyone or commit it to GitHub.
+
+If both are true but Google sign-in still fails, enable the Google provider in Firebase Authentication and add the exact Vercel hostname to Firebase Authentication -> Settings -> Authorized domains. Browser-side errors such as `auth/unauthorized-domain` or `auth/popup-blocked` are separate from the server configuration check.
+
 ## G. Notes
 
 - Guest data is temporary and may disappear when Vercel recycles a function instance.

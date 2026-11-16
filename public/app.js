@@ -521,7 +521,7 @@ async function boot() {
   try {
     const result = await initializeFirebaseClient();
     state.firebase = result;
-    if (!result.configured) $('#welcome-auth-hint').textContent = 'Firebase is not configured yet. Guest workspace is ready; add your Firebase settings to enable Google and email sign-in.';
+    if (!result.configured) $('#welcome-auth-hint').textContent = `${result.message || 'Firebase setup is incomplete.'} Guest workspace is available in the meantime.`;
     else {
       $('#welcome-auth-hint').textContent = 'Google and email authentication are enabled.';
       watchAuth(async user => {
@@ -531,9 +531,9 @@ async function boot() {
       });
     }
     const health = await fetch('/api/health').then(r => r.json());
-    if (!health.firebase) $('#system-status-text').textContent = 'Firebase setup required · Guest mode available';
+    if (!health.firebaseAuth) $('#system-status-text').textContent = 'Firebase setup required · Guest mode available';
   } catch (error) {
-    $('#welcome-auth-hint').textContent = 'Firebase setup is pending. Guest workspace is ready.';
+    $('#welcome-auth-hint').textContent = `${error.message || 'Firebase setup is pending.'} Guest workspace is ready.`;
     console.warn('BrandWeave initialisation:', error);
   }
 }

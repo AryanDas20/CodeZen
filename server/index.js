@@ -23,36 +23,83 @@ const MAX_UPLOAD = 4 * 1024 * 1024;
 
 let firebaseAuthReady = false;
 let adminAuth = null;
+let firebaseAdminStatus = { code: 'missing_credentials', message: 'Firebase Admin credentials are missing. Add FIREBASE_SERVICE_ACCOUNT_JSON in Vercel and redeploy.' };
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'brandweave-sources';
 const supabaseUrl = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const supabaseKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const supabaseReady = Boolean(supabaseUrl && supabaseKey);
 
+function parseServiceAccount(rawValue) {
+  let raw = String(rawValue || '').trim();
+  if (!raw) throw Object.assign(new Error('Service account JSON is empty.'), { configCode: 'missing_credentials' });
+
+  // Accept a normal JSON object, a JSON-encoded string containing JSON,
+  // and a value accidentally wrapped in single quotes by a shell command.
+  if (raw.startsWith("'") && raw.endsWith("'")) raw = raw.slice(1, -1);
+  let parsed = JSON.parse(raw);
+  if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw Object.assign(new Error('Service account JSON must be an object.'), { configCode: 'invalid_service_account' });
+  }
+  parsed.private_key = typeof parsed.private_key === 'string'
+    ? parsed.private_key.replace(/\\n/g, '\n').replace(/\r\n/g, '\n')
+    : parsed.private_key;
+  if (parsed.type !== 'service_account' || !parsed.project_id || !parsed.client_email || !parsed.private_key) {
+    throw Object.assign(new Error('Service account JSON is missing required service-account fields.'), { configCode: 'invalid_service_account' });
+  }
+  try {
+    crypto.createPrivateKey(parsed.private_key);
+  } catch {
+    throw Object.assign(new Error('Service account private_key is not a valid PEM private key.'), { configCode: 'invalid_service_account' });
+  }
+  return parsed;
+}
+
 function initializeFirebase() {
   try {
-    const hasCredentials = Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.K_SERVICE || process.env.FIREBASE_CONFIG);
-    if (!hasCredentials) {
-      console.warn('Firebase Admin credentials are missing. Set FIREBASE_SERVICE_ACCOUNT_JSON or use Application Default Credentials.');
+    let credential;
+    let serviceAccountProjectId = '';
+
+    if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+      const serviceAccount = parseServiceAccount(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+      serviceAccountProjectId = serviceAccount.project_id;
+      const webProjectId = String(process.env.FIREBASE_PROJECT_ID || '').trim();
+      if (webProjectId && serviceAccountProjectId !== webProjectId) {
+        throw Object.assign(new Error('The Firebase service account belongs to a different project.'), { configCode: 'project_mismatch' });
+      }
+      credential = cert(serviceAccount);
+    } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.K_SERVICE) {
+      // Application Default Credentials are supported for local files and Google-managed runtimes.
+      credential = applicationDefault();
+    } else {
+      firebaseAdminStatus = {
+        code: 'missing_credentials',
+        message: 'Firebase Web App values are present, but the server is missing FIREBASE_SERVICE_ACCOUNT_JSON. Add the complete service-account JSON in Vercel and redeploy.'
+      };
+      console.warn(firebaseAdminStatus.message);
       return;
     }
-    if (getApps().length === 0) {
-      let credential;
-      if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-        credential = cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON));
-      } else {
-        credential = applicationDefault();
-      }
-      initializeApp({
-        credential,
-        projectId: process.env.FIREBASE_PROJECT_ID || undefined
-      });
-    }
-    adminAuth = getAuth();
+
+    const existingDefaultApp = getApps().find((firebaseApp) => firebaseApp.name === '[DEFAULT]');
+    const firebaseProjectId = String(process.env.FIREBASE_PROJECT_ID || serviceAccountProjectId || '').trim() || undefined;
+    const firebaseApp = existingDefaultApp || initializeApp({ credential, projectId: firebaseProjectId });
+    adminAuth = getAuth(firebaseApp);
     firebaseAuthReady = true;
+    firebaseAdminStatus = { code: 'configured', message: 'Firebase Admin is configured.' };
     console.log('Firebase Admin initialized.');
   } catch (error) {
     firebaseAuthReady = false;
-    console.warn('Firebase Admin is not configured. Guest mode remains available.', error.message);
+    adminAuth = null;
+    const code = error.configCode || (error instanceof SyntaxError ? 'invalid_json' : 'admin_initialization_failed');
+    const messages = {
+      missing_credentials: 'Firebase Admin credentials are missing. Add the complete service-account JSON to FIREBASE_SERVICE_ACCOUNT_JSON in Vercel, then redeploy.',
+      invalid_json: 'FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON. Paste the complete contents of the downloaded service-account JSON file.',
+      invalid_service_account: 'The service-account JSON is missing required fields. It must contain project_id, client_email and private_key.',
+      project_mismatch: 'The Firebase Web App project ID and service-account project_id do not match. Use credentials from the same Firebase project.',
+      admin_initialization_failed: 'Firebase Admin could not initialize. Check that the service-account key is valid, active and from the correct Firebase project.'
+    };
+    firebaseAdminStatus = { code, message: messages[code] || messages.admin_initialization_failed };
+    console.warn('Firebase Admin is not configured. Guest mode remains available.', code, error.message);
   }
 }
 initializeFirebase();
@@ -243,19 +290,56 @@ async function audit(user, action, details = {}) {
   else await addRecord(user, 'audit', entry);
 }
 
-app.get('/api/health', (_req, res) => res.json({ status: 'ok', firebaseAuth: firebaseAuthReady, supabase: supabaseReady, agent37: agent37Status().configured }));
-app.get('/api/config', (_req, res) => res.json({
-  firebase: {
-    apiKey: process.env.FIREBASE_API_KEY || '',
-    authDomain: process.env.FIREBASE_AUTH_DOMAIN || '',
-    projectId: process.env.FIREBASE_PROJECT_ID || '',
-    messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || '',
-    appId: process.env.FIREBASE_APP_ID || ''
-  },
-  firebaseConfigured: Boolean(process.env.FIREBASE_API_KEY && process.env.FIREBASE_AUTH_DOMAIN && process.env.FIREBASE_PROJECT_ID && firebaseAuthReady),
-  supabaseConfigured: supabaseReady,
-  agent37: agent37Status()
-}));
+function getFirebaseWebConfig() {
+  return {
+    apiKey: String(process.env.FIREBASE_API_KEY || '').trim(),
+    authDomain: String(process.env.FIREBASE_AUTH_DOMAIN || '').trim(),
+    projectId: String(process.env.FIREBASE_PROJECT_ID || '').trim(),
+    messagingSenderId: String(process.env.FIREBASE_MESSAGING_SENDER_ID || '').trim(),
+    appId: String(process.env.FIREBASE_APP_ID || '').trim()
+  };
+}
+
+function getFirebaseDiagnostics() {
+  const firebase = getFirebaseWebConfig();
+  const required = ['apiKey', 'authDomain', 'projectId', 'messagingSenderId', 'appId'];
+  const missingWebFields = required.filter((key) => !firebase[key]);
+  const firebaseWebConfigured = missingWebFields.length === 0;
+  return {
+    firebaseWebConfigured,
+    firebaseAdminConfigured: firebaseAuthReady,
+    firebaseConfigured: firebaseWebConfigured && firebaseAuthReady,
+    missingWebFields,
+    adminStatus: firebaseAdminStatus.code,
+    adminMessage: firebaseAdminStatus.message
+  };
+}
+
+app.get('/api/health', (_req, res) => {
+  const firebase = getFirebaseDiagnostics();
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    status: 'ok',
+    firebaseAuth: firebase.firebaseConfigured,
+    firebaseWeb: firebase.firebaseWebConfigured,
+    firebaseAdmin: firebase.firebaseAdminConfigured,
+    firebaseStatus: firebase.adminStatus,
+    firebaseMessage: firebase.adminMessage,
+    missingFirebaseWebFields: firebase.missingWebFields,
+    supabase: supabaseReady,
+    agent37: agent37Status().configured
+  });
+});
+app.get('/api/config', (_req, res) => {
+  const diagnostics = getFirebaseDiagnostics();
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    firebase: getFirebaseWebConfig(),
+    ...diagnostics,
+    supabaseConfigured: supabaseReady,
+    agent37: agent37Status()
+  });
+});
 app.post('/api/guest/session', (_req, res) => {
   const id = crypto.randomUUID();
   const exp = Date.now() + 1000 * 60 * 60 * 12;
@@ -564,6 +648,7 @@ app.post('/api/agent/confirm', async (req, res, next) => {
 });
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'API route not found.' }));
+// Vercel serves files inside /public from its static CDN. This middleware also serves them locally.
 app.use(express.static(path.join(rootDir, 'public'), { extensions: ['html'] }));
 app.get(/.*/, (_req, res) => res.sendFile(path.join(rootDir, 'public', 'index.html')));
 app.use((error, _req, res, _next) => {

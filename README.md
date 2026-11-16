@@ -62,7 +62,7 @@ The Storage bucket is private. Upload and delete requests are made by the Expres
 
 ## Health check
 
-Open `https://YOUR-VERCEL-DOMAIN/api/health`. A configured deployment should report `firebaseAuth: true` and `supabase: true`.
+Open `https://YOUR-VERCEL-DOMAIN/api/health`. A fully configured deployment should report `firebaseAuth: true`, `firebaseWeb: true`, `firebaseAdmin: true` and `supabase: true`. If sign-in is not ready, inspect `firebaseStatus`, `firebaseMessage` and `missingFirebaseWebFields`; these fields identify the missing setup without exposing credentials. The deployment guide includes a diagnostic-code table.
 
 ## Upload limits
 
