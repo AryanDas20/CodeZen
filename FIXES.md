@@ -25,3 +25,8 @@ This update keeps the intended architecture:
 4. Open `/api/health` on the deployed domain and follow `firebaseStatus` / `firebaseMessage` if `firebaseAuth` is still false.
 
 Never commit `.env`, a service-account JSON file, or Supabase secret keys.
+
+
+## Vercel API routing fix
+
+The root `index.js` now creates an Express application directly and mounts the existing BrandWeave server app. This makes the root entrypoint follow Vercel's Express detection contract. The backend already defines `/api/config` and `/api/health`; a 404 for those paths indicates the deployment was not routing requests to the Express app. After deploying this update, confirm the Vercel Root Directory is `./` and allow Express framework detection.

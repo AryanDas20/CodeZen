@@ -31,7 +31,7 @@ Firestore and Firebase Storage are not used by this version. Do not create a Fir
 ## Vercel deployment
 
 1. Push the project files to your GitHub repository and import that repository at https://vercel.com/new.
-2. Use Root Directory `./`, Framework Preset `Other`, and leave Build Command and Output Directory blank. Vercel installs dependencies from `package.json`.
+2. Use Root Directory `./` and allow Vercel to detect Express. Leave Build Command and Output Directory blank. The root `index.js` directly exports an Express app and mounts the backend in `server/index.js`. Do not set Root Directory to `public/` or `server/`.
 3. Add these Vercel Environment Variables for Production (and Preview/Development if needed):
 
 | Name | Value |

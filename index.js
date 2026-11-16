@@ -1,7 +1,9 @@
 import express from 'express';
-import app from './server/index.js';
+import brandWeaveApp from './server/index.js';
 
-// Express is imported at the deployment entrypoint for Vercel framework detection.
-void express;
+// Vercel detects this root-level Express application and sends requests to it
+// as one Node.js Function. The existing backend remains in server/index.js.
+const app = express();
+app.use(brandWeaveApp);
 
 export default app;
