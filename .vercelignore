@@ -1,0 +1,7 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+**/*service-account*.json
+node_modules
+.git

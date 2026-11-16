@@ -1,126 +1,77 @@
-# BrandWeave — Evidence-led brand governance
+# BrandWeave
 
-BrandWeave is a full-stack Round 2 build for Phoenix Coders. It brings approved brand knowledge, explainable content checks, revision history and human decisions into one workspace.
+BrandWeave is an evidence-led brand governance workspace: one source of truth for brand facts, terminology, policies and content review decisions. It is deliberately not an auto-publishing tool. AI assistance can prepare recommendations and actions, but consequential changes require human confirmation.
 
-**Product promise:** One source of truth. Every story on-brand.
+## Stack and data flow
 
-## What is included
+- **Firebase Authentication only**: Google and email/password sign-in. Firebase Admin verifies ID tokens and updates the Firebase Auth display name.
+- **Supabase REST (PostgREST)**: all persistent BrandWeave records (brand sources, reviews, revisions, decisions and audit events) are stored in `public.brandweave_records`.
+- **Supabase Storage REST**: uploaded source documents are stored in the private `brandweave-sources` bucket.
+- **Express on Vercel**: verifies Firebase ID tokens, then performs server-side Supabase REST and Storage requests. Supabase secret/service-role credentials are never sent to the browser.
+- **Guest mode**: temporary in-memory data only; it may be lost when a Vercel function instance is recycled.
 
-- Dark, responsive enterprise workspace with overview, Brand Memory, Content Review, Review Queue, Approvals, Policy Insights and Audit Trail.
-- Firebase Authentication integration for Google and email/password sign-in.
-- Guest workspace without login. Guest records are temporary and held in server memory; no sample organisations, campaigns, users, scores or activity are seeded.
-- Firebase Admin SDK server authentication, Firestore persistence and Firebase Storage file uploads for signed-in accounts.
-- Manual source records for guidelines, approved facts, terminology, policies and other knowledge.
-- PDF, DOCX and text extraction for supported uploaded sources.
-- Deterministic first-pass checks for comparative claims, absolute/guarantee wording, quantified claims, vague promotional language and manually configured banned terminology.
-- Review records with findings, revisions, version history, human decisions and audit events.
-- AI command centre with page navigation and confirmation-gated profile changes.
-- Agent37 server-side bridge adapter. It does not pretend an instance ID is an embeddable API credential.
-
-## Important build boundaries
-
-1. **No demo data:** a new workspace starts empty. Metrics are derived from records actually created in that workspace.
-2. **No automatic publishing:** approval is recorded inside BrandWeave only. Publishing remains outside this MVP.
-3. **Human oversight:** findings are signals, not proof. A possible source match must be verified by a reviewer. High-risk approval requires an additional acknowledgement.
-4. **Agent37:** the public Agent37 Personal page describes hosted agents, but an instance ID by itself does not define a browser-embeddable chat API. The adapter in `server/agent37.js` expects a separately documented, supported bridge endpoint. Until one is provided and tested, built-in workspace commands still work and the UI reports that Agent37 is not connected. Do not put Agent37 secrets in browser code.
-5. **Personal workspace MVP:** the current workspace is scoped to the signed-in user's UID. Team invitations, granular creator/manager/reviewer/admin roles and multi-tenant organisation switching are designed follow-on work, not falsely represented as complete.
-6. **Guest privacy:** guest records exist only in the running server's memory and expire with the 12-hour signed token. A server restart clears them. Do not enter confidential company content in guest mode.
+Firestore and Firebase Storage are not used by this version. Do not create a Firestore database or deploy Firebase database/storage rules for BrandWeave.
 
 ## Requirements
 
-- Node.js 22.x.
-- A Firebase project with Authentication, Cloud Firestore and Cloud Storage enabled for persistent accounts.
-- A registered Firebase Web App configuration.
-- Firebase Admin credentials for the Node.js server.
+- Node.js 22
+- A Firebase project with Authentication enabled (Google and Email/Password providers)
+- A Supabase project with Data API enabled
+- A Vercel account for deployment
 
-## Run locally
+## Local setup
 
-```bash
-cp .env.example .env
-npm install
-npm start
-```
+1. Copy `.env.example` to `.env`.
+2. Fill in Firebase web configuration: `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_MESSAGING_SENDER_ID`, and `FIREBASE_APP_ID`.
+3. Add the Firebase service-account JSON to `FIREBASE_SERVICE_ACCOUNT_JSON`. It is used only for Firebase Authentication Admin operations. Never commit it.
+4. Fill in `SUPABASE_URL` and `SUPABASE_SECRET_KEY`. A current Supabase secret key (`sb_secret_...`) is preferred; the legacy `service_role` JWT is also accepted. This key is server-only.
+5. In Supabase Dashboard -> SQL Editor, run the complete `supabase-schema.sql` file once. It creates the records table, enables RLS, restricts table access to the server role, and creates the private file bucket.
+6. Run `npm install`, then `npm run dev`.
 
-Open `http://localhost:3000`.
+## Vercel deployment
 
-Guest mode works without Firebase credentials. Google and email authentication plus persistent storage require Firebase setup below.
+1. Push the project files to your GitHub repository and import that repository at https://vercel.com/new.
+2. Use Root Directory `./`, Framework Preset `Other`, and leave Build Command and Output Directory blank. Vercel installs dependencies from `package.json`.
+3. Add these Vercel Environment Variables for Production (and Preview/Development if needed):
 
-## Firebase setup
+| Name | Value |
+|---|---|
+| `NODE_ENV` | `production` |
+| `GUEST_TOKEN_SECRET` | A random secret of at least 32 characters |
+| `FIREBASE_API_KEY` | Firebase Web App API key |
+| `FIREBASE_AUTH_DOMAIN` | e.g. `your-project.firebaseapp.com` |
+| `FIREBASE_PROJECT_ID` | Firebase project ID |
+| `FIREBASE_MESSAGING_SENDER_ID` | Firebase sender ID |
+| `FIREBASE_APP_ID` | Firebase Web App ID |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Entire service-account JSON, kept secret |
+| `SUPABASE_URL` | `https://YOUR_PROJECT_REF.supabase.co` |
+| `SUPABASE_SECRET_KEY` | Supabase `sb_secret_...` key (server-only) |
+| `SUPABASE_STORAGE_BUCKET` | `brandweave-sources` |
 
-1. Create a Firebase project at https://console.firebase.google.com/.
-2. Add a Web App and copy its configuration values into `.env`:
-   - `FIREBASE_API_KEY`
-   - `FIREBASE_AUTH_DOMAIN`
-   - `FIREBASE_PROJECT_ID`
-   - `FIREBASE_STORAGE_BUCKET`
-   - `FIREBASE_MESSAGING_SENDER_ID`
-   - `FIREBASE_APP_ID`
-3. In Firebase Authentication → Sign-in method, enable **Google** and **Email/Password**.
-4. Add your local and deployed domains to Authentication → Settings → Authorized domains.
-5. Create a Cloud Firestore database and enable Firebase Storage.
-6. For local development, create a Firebase service account and set `GOOGLE_APPLICATION_CREDENTIALS` to the absolute path of the JSON file. Never put that JSON file in the ZIP, Git repository or public hosting variables visible to the browser.
-7. Alternatively, set `FIREBASE_SERVICE_ACCOUNT_JSON` in the hosting provider's secret environment variables to the one-line service account JSON. Do not commit it.
-8. Set `GUEST_TOKEN_SECRET` to a long random secret (32+ characters).
-9. Deploy `firestore.rules` and `storage.rules` from the Firebase console or Firebase CLI. This app uses the Node server as the access layer; browser-side direct database/storage access is denied intentionally.
-10. Restart the server and verify `/api/health` reports Firebase as ready. Test Google login and email/password login with real accounts.
+Do not add Firebase Storage bucket settings. Do not add Supabase keys to browser code or commit them to GitHub. Do not set `GOOGLE_APPLICATION_CREDENTIALS` on Vercel.
 
-The Firebase web config is intended to be available to the browser; the Admin service-account credential and any API tokens must remain server-side secrets.
+4. Run `supabase-schema.sql` in the Supabase SQL Editor before testing persistent features.
+5. In Firebase Console -> Authentication -> Settings -> Authorized domains, add your Vercel hostname (for example `brandweave.vercel.app`, without `https://`). Enable Google and Email/Password sign-in providers.
+6. Redeploy after adding or changing environment variables.
 
-## File uploads
+## Supabase REST and security
 
-Signed-in users can upload PDF, DOCX, TXT, Markdown, CSV and common image files up to 4 MB per request (Vercel Function request-body limit). Files are saved under a user-scoped Storage path. The server attempts text extraction for PDF, DOCX and text-based files. Image uploads are stored, but image/logo similarity analysis is not implemented in this release. Guest mode intentionally offers manual text sources only.
+The server accesses `brandweave_records` using the Supabase REST endpoint `/rest/v1/brandweave_records`. Each record is scoped by the Firebase Auth UID (`owner_uid`) and collection name. The browser never receives the Supabase secret/service-role key. The SQL setup enables Row Level Security and grants table access only to `service_role`; the Express server is the trusted access layer and filters every record operation by the verified Firebase UID. Keep the Supabase secret key private.
 
-## Agent37 integration
+The Storage bucket is private. Upload and delete requests are made by the Express server through Supabase Storage REST. Uploaded file paths are namespaced under `workspaces/{firebase-uid}/sources/`.
 
-The project includes a server-side adapter in `server/agent37.js`. It accepts these optional environment settings:
+## Health check
 
-```env
-AGENT37_BRIDGE_URL=
-AGENT37_BRIDGE_TOKEN=
-AGENT37_INSTANCE_ID=
-```
+Open `https://YOUR-VERCEL-DOMAIN/api/health`. A configured deployment should report `firebaseAuth: true` and `supabase: true`.
 
-Only set them when Agent37 or a supported integration provider gives you a documented endpoint and payload contract. The adapter currently sends a JSON body containing `instanceId`, `message`, a minimal user identity, limited workspace context and explicit safety constraints. It accepts a plain-text `reply` or `message` field. If the actual supported Agent37 bridge uses another contract, update the adapter and test it before enabling the integration. An instance ID alone is not a public API key.
+## Upload limits
 
-The event instructions you shared say to create the agent from https://www.agent37.com/personal (the Hackyard offer link is https://www.agent37.com/redeem/HACKYARD) and submit the instance ID and dashboard screenshot via the Hackyard Agent37 form. They also warn not to use the Cloud Sandbox/API page or enter card details for this challenge.
+Vercel Functions have a 4.5 MB request-body limit. This build limits server-mediated uploads to 4 MB to leave room for multipart overhead. Larger uploads require a direct signed upload flow to Supabase Storage.
 
-## AI command centre behavior
+## Current product boundaries
 
-Built-in actions available now:
-
-- Navigate to Overview, Brand Memory, Content Review, Review Queue, Approvals, Policy Insights and Audit Trail.
-- Prepare a profile display-name update. The assistant shows the proposed value; the server applies it only after the user confirms.
-- Explain supported product boundaries and point users to the correct workflow.
-
-The action router is allowlisted. It does not expose arbitrary Firestore access, shell execution, publishing, bulk approvals or unrestricted browser control. Add new tools one at a time with server-side authorization, validation, confirmation and audit logging.
-
-## Deployment on Vercel
-
-This project is configured for Vercel's Express integration. The root `index.js` exports the Express app as a Vercel Node.js Function. Vercel serves files in `public/` through its CDN; there is no separate frontend build or output directory.
-
-Follow [`VERCEL_DEPLOYMENT.md`](./VERCEL_DEPLOYMENT.md) for the complete GitHub import, environment variable, Firebase Authorized Domains, and verification steps. Do not use Render-specific build/start settings.
-
-Vercel Functions have a 4.5 MB request-body limit, so server-mediated uploads are limited to 4 MB in this build. Guest state remains in function memory and can reset when Vercel recycles an instance; signed-in records remain in Firestore.
-
-## Verification checklist before judges use it
-
-- [ ] Open the deployed site in a private/incognito window.
-- [ ] Continue as guest and verify that every page starts empty.
-- [ ] Create a real manual brand source and confirm it appears in Brand Memory.
-- [ ] Submit a real draft and confirm findings are tied to the exact excerpt.
-- [ ] Revise the draft and confirm a new version is recorded.
-- [ ] Request changes or approve after reviewing evidence; check the audit trail.
-- [ ] Sign in with Google and confirm data persists after refresh.
-- [ ] Upload a real PDF or DOCX and verify file storage and text extraction.
-- [ ] Test on mobile width and use keyboard navigation.
-- [ ] Verify Agent37 separately; do not claim it is connected until the supported bridge has been tested end-to-end.
-
-## Current limitations / next build layer
-
-- The present analysis engine is deterministic and transparent; it is not a full semantic LLM or legal/factual verification system.
-- Visual identity comparison, colour contrast analysis of uploaded assets, semantic retrieval/embeddings, real-time collaborative comments, role management, reviewer assignment and scheduled expiry alerts need further implementation and evaluation.
-- The PDF/DOCX pipeline extracts text; it does not yet preserve document layout or perform robust OCR on images.
-- Insights are descriptive counters from real records, not statistically validated quality metrics.
-- The Agent37 external bridge must be confirmed against the actual integration contract.
-
-This is an implementation baseline, not a claim that every planned future feature has already been delivered. Verify the deployment checklist before presenting it to judges.
+- The first-pass review engine is deterministic and rule-based, not semantic AI or legal/factual verification.
+- A possible source match is not proof that a claim is substantiated.
+- Human review and approval remain required; there is no automatic publishing.
+- Guest workspace data is temporary and held in function memory.
+- Agent37 is an optional bridge adapter and is not active until a documented endpoint and request schema are configured.
