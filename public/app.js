@@ -136,7 +136,9 @@ function updateProfileDisplay() {
   const name = state.profile.displayName || state.user?.displayName || (state.user?.isGuest ? 'Guest workspace' : 'Workspace member');
   $('#user-name').textContent = name;
   $('#user-email').textContent = state.user?.isGuest ? 'Temporary guest session' : (state.profile.email || state.user?.email || 'Signed in');
-  $('#user-avatar').textContent = (name.trim()[0] || 'B').toUpperCase();
+  const initial = (name.trim()[0] || 'B').toUpperCase();
+  $('#user-avatar').textContent = initial; $('#top-avatar').textContent = initial; $('#set-avatar').textContent = initial;
+  $('#set-name').textContent = name; $('#set-email').textContent = $('#user-email').textContent;
   $('#workspace-name').textContent = state.user?.isGuest ? 'Guest workspace' : (name + '’s workspace');
   $('#workspace-plan').textContent = state.user?.isGuest ? 'TEMPORARY SESSION' : 'PERSONAL WORKSPACE';
 }
@@ -526,6 +528,11 @@ function runSearch(query) {
 $('#welcome-guest').addEventListener('click', startGuest);
 $('#welcome-google').addEventListener('click', handleGoogleSignIn);
 $$('[data-open-auth]').forEach(b => b.addEventListener('click', () => openAuth(b.dataset.openAuth)));
+$('#account-button').addEventListener('click', openSettings);
+$$('[data-set-theme]').forEach(b => b.addEventListener('click', () => applyTheme(b.dataset.setTheme)));
+$('#set-edit').addEventListener('click', () => { hideModal('#settings-modal'); profileEdit(); });
+$('#set-tour').addEventListener('click', () => { hideModal('#settings-modal'); beginTour(); });
+$('#set-signout').addEventListener('click', () => { hideModal('#settings-modal'); $('#profile-popover [data-profile-action="signout"]').click(); });
 $$('[data-theme-toggle]').forEach(b => b.addEventListener('click', toggleTheme));
 document.addEventListener('click', event => {
   if (event.target.closest('[data-start-tour]')) beginTour();
@@ -542,7 +549,7 @@ $('#global-search-results').addEventListener('click', async event => {
 $('#auth-google').addEventListener('click', handleGoogleSignIn);
 $('#auth-form').addEventListener('submit', handleAuthSubmit);
 $$('[data-auth-mode]').forEach(tab => tab.addEventListener('click', () => { state.authMode = tab.dataset.authMode; updateAuthMode(); }));
-$$('[data-close-modal]').forEach(btn => btn.addEventListener('click', () => { hideModal('#auth-modal'); hideModal('#feature-modal'); hideModal('#confirm-modal'); hideModal('#search-modal'); }));
+$$('[data-close-modal]').forEach(btn => btn.addEventListener('click', () => { hideModal('#auth-modal'); hideModal('#feature-modal'); hideModal('#confirm-modal'); hideModal('#search-modal'); hideModal('#settings-modal'); }));
 $('#confirm-cancel').addEventListener('click', () => { state.pendingAction = null; hideModal('#confirm-modal'); });
 $('#confirm-apply').addEventListener('click', async () => { if (!state.pendingAction) return; const fn = state.pendingAction; $('#confirm-apply').disabled = true; try { await fn(); } catch (error) { showToast(error.message, 'error'); } finally { $('#confirm-apply').disabled = false; state.pendingAction = null; hideModal('#confirm-modal'); } });
 $('#sidebar-collapse').addEventListener('click', () => $('#sidebar').classList.toggle('collapsed'));
@@ -586,7 +593,7 @@ $('#profile-popover').addEventListener('click', async event => {
   const action = event.target.closest('[data-profile-action]')?.dataset.profileAction; if (!action) return;
   $('#profile-popover').classList.add('hidden');
   if (action === 'profile') profileEdit();
-  if (action === 'account') showToast('Sign-in security is managed by your sign-in provider.', 'info', 'Change your password or Google security settings there.');
+  if (action === 'account') openSettings();
   if (action === 'signout') {
     if (!window.confirm('Sign out of this BrandWeave session?')) return;
     try { await signOutFirebase(); } catch {}
@@ -595,14 +602,17 @@ $('#profile-popover').addEventListener('click', async event => {
 });
 window.addEventListener('keydown', event => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openAssistant(); }
-  if (event.key === 'Escape') { hideModal('#search-modal'); hideModal('#feature-modal'); hideModal('#confirm-modal'); hideModal('#auth-modal'); closeAssistant(); $('#sidebar').classList.remove('mobile-open'); }
+  if (event.key === 'Escape') { hideModal('#search-modal'); hideModal('#feature-modal'); hideModal('#confirm-modal'); hideModal('#auth-modal'); hideModal('#settings-modal'); closeAssistant(); $('#sidebar').classList.remove('mobile-open'); }
 });
 
-function toggleTheme() {
-  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+function toggleTheme() { applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); }
+function openSettings() { syncThemeButtons(); showModal('#settings-modal'); }
+function syncThemeButtons() { $$('[data-set-theme]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.setTheme === document.documentElement.dataset.theme))); }
+function applyTheme(next) {
   document.documentElement.dataset.theme = next;
   try { localStorage.setItem('bw-theme', next); } catch {}
-  $('meta[name="theme-color"]')?.setAttribute('content', next === 'dark' ? '#24211E' : '#FAF8F3');
+  $('meta[name="theme-color"]')?.setAttribute('content', next === 'dark' ? '#1B1A18' : '#FAF8F3');
+  syncThemeButtons();
 }
 function beginTour() {
   const inApp = !$('#app-shell').classList.contains('hidden');
