@@ -204,7 +204,7 @@ function supabaseHeaders(extra = {}) {
   return headers;
 }
 function supabasePath(pathname) {
-  if (!supabaseReady) throw new Error('Supabase is not configured. Add SUPABASE_URL and SUPABASE_SECRET_KEY.');
+  if (!supabaseReady) throw Object.assign(new Error('Supabase is not configured. Add SUPABASE_URL and SUPABASE_SECRET_KEY.'), { status: 503 });
   return `${supabaseUrl}${pathname}`;
 }
 async function supabaseRequest(pathname, options = {}) {
@@ -471,9 +471,9 @@ app.delete('/api/sources/:id', async (req, res, next) => {
 function analyzeContent(content, sources) {
   const findings = [];
   const checks = [
-    { regex: /\b(world'?s\s+(?:number\s+one|no\.?\s*1|#1)|#1|best[- ]in[- ]class|industry[- ]leading)\b/ig, title: 'Comparative or superlative claim', severity: 'high', category: 'Facts & claims', explanation: 'A ranking or superiority claim needs an approved, dated methodology or evidence source.' },
-    { regex: /\b(guarantee[sd]?|guaranteed|always|never|every(?:one|body)?|all customers|100\s*%|zero risk)\b/ig, title: 'Absolute or guarantee language', severity: 'high', category: 'Facts & claims', explanation: 'Absolute promises can create an expectation that needs precise evidence and approved terms.' },
-    { regex: /\b\d+(?:\.\d+)?\s*(?:%|percent|x|times|days?|hours?|minutes?)\b/ig, title: 'Quantified claim', severity: 'medium', category: 'Facts & claims', explanation: 'A number or measurable outcome should be linked to an approved study, scope and validity period.' },
+    { regex: /(?<!\w)(world'?s\s+(?:number\s+one|no\.?\s*1|#1)|#1|best[- ]in[- ]class|industry[- ]leading)(?!\w)/ig, title: 'Comparative or superlative claim', severity: 'high', category: 'Facts & claims', explanation: 'A ranking or superiority claim needs an approved, dated methodology or evidence source.' },
+    { regex: /(?<!\w)(guarantee[sd]?|guaranteed|always|never|every(?:one|body)?|all customers|100\s*%|zero risk)(?!\w)/ig, title: 'Absolute or guarantee language', severity: 'high', category: 'Facts & claims', explanation: 'Absolute promises can create an expectation that needs precise evidence and approved terms.' },
+    { regex: /(?<![\w.])\d+(?:\.\d+)?\s*(?:%|percent|x|times|days?|hours?|minutes?)(?!\w)/ig, title: 'Quantified claim', severity: 'medium', category: 'Facts & claims', explanation: 'A number or measurable outcome should be linked to an approved study, scope and validity period.' },
     { regex: /\b(revolutionary|unmatched|unprecedented|cutting[- ]edge|world[- ]class)\b/ig, title: 'Vague promotional language', severity: 'low', category: 'Tone & voice', explanation: 'Consider replacing broad promotional language with a specific, verifiable benefit.' }
   ];
   const approved = sources.filter(s => ['approved_fact', 'guideline', 'policy'].includes(s.type) && s.status === 'active');
@@ -505,7 +505,7 @@ function analyzeContent(content, sources) {
       if (!match) continue;
       for (const term of match[1].split(',').map(s => s.trim()).filter(Boolean)) {
         const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(`\\b${escaped}\\b`, 'ig');
+        const regex = new RegExp(`(?<!\\w)${escaped}(?!\\w)`, 'ig');
         let hit;
         while ((hit = regex.exec(content)) !== null) {
           findings.push({ id: crypto.randomUUID(), title: 'Restricted terminology', category: 'Terminology', severity: 'medium', excerpt: hit[0], context: content.slice(Math.max(0, hit.index - 90), Math.min(content.length, hit.index + 120)), explanation: `Your terminology source “${source.title}” identifies this expression as restricted.`, evidenceStatus: 'source_found', evidence: [{ sourceId: source.id, title: source.title, type: source.type }], recommendation: 'Replace it with the approved term specified by your brand team.', confidence: 'exact phrase match' });
@@ -599,7 +599,6 @@ function routeIntent(message) {
     { re: /(dashboard|overview|home)/, target: 'overview', label: 'Overview' },
     { re: /(content review|start a review|new review|check content)/, target: 'review', label: 'Content Review' }
   ];
-  for (const route of routes) if (route.re.test(text)) return { type: 'navigate', target: route.target, label: route.label };
   const name = message.match(/(?:change|update|set) my (?:username|name|profile name) (?:to|as) ["“]?(.+?)["”]?$/i);
   if (name) return { type: 'update_profile', payload: { displayName: name[1].trim().replace(/[.!?]+$/, '').slice(0, 60) }, requiresConfirmation: true };
   const review = message.match(/(?:review|analyse|analyze|check) (?:this|the following)(?: content)?\s*[:\-]\s*([\s\S]+)/i);
@@ -610,6 +609,8 @@ function routeIntent(message) {
     const type = rawType.includes('terminology') ? 'terminology' : rawType.includes('fact') ? 'approved_fact' : rawType;
     return { type: 'create_source', payload: { type, title: source[2].trim().replace(/^["“]|["”]$/g, '') || `AI-created ${type.replaceAll('_',' ')}`, content: source[3].trim().slice(0, 50000) }, requiresConfirmation: true };
   }
+  // Navigation is checked last so words like "audit" or "sources" inside pasted content never hijack a review or source command.
+  for (const route of routes) if (route.re.test(text)) return { type: 'navigate', target: route.target, label: route.label };
   return null;
 }
 app.get('/api/agent/status', (_req, res) => res.json(agent37Status()));
@@ -651,6 +652,7 @@ app.post('/api/agent/confirm', async (req, res, next) => {
       if (displayName.length < 2 || displayName.length > 60) return res.status(400).json({ error: 'Invalid display name.' });
       if (req.user.isGuest) guestState(req.user).profile.displayName = displayName;
       else {
+        if (!adminAuth) return res.status(503).json({ error: 'Firebase Authentication is not configured.' });
         await adminAuth.updateUser(req.user.uid, { displayName });
       }
       await audit(req.user, 'profile.updated_by_assistant', { displayName });
@@ -685,7 +687,7 @@ app.get(/.*/, (_req, res) => res.sendFile(path.join(rootDir, 'public', 'index.ht
 app.use((error, _req, res, _next) => {
   console.error(error);
   const status = error.status || (error.code === 'LIMIT_FILE_SIZE' ? 413 : (String(error.message || '').startsWith('Unsupported file type') ? 400 : 500));
-  res.status(status).json({ error: status >= 500 ? 'Something went wrong on the server. Check the server logs and configuration.' : error.message });
+  res.status(status).json({ error: status >= 500 && status !== 503 ? 'Something went wrong on the server. Check the server logs and configuration.' : error.message });
 });
 
 // Vercel imports the Express app as a serverless function. Start a local listener only outside Vercel.

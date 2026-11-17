@@ -3,6 +3,9 @@ import {
   signOutFirebase, watchAuth, getFreshIdToken, describeAuthError, isAuthCancellation
 } from './firebase-client.js';
 
+import { illus, illusForIcon } from './illustrations.js';
+import { startTour } from './tour.js';
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const state = {
@@ -43,6 +46,24 @@ const featureCopy = {
   }
 };
 
+const EXPLAIN = {
+  overview: ['How your workspace works', 'This page is your starting point. The four counters show real numbers from your own records and start at zero.', ['Brand memory: approved sources you have added.', 'Content reviews: drafts you have analysed.', 'Awaiting decision: reviews not yet approved or rejected.', 'Approved: reviews a person has signed off.']],
+  memoryList: ['Your source library', 'Every source here is used when you review a draft. Active sources are searched for possible evidence, and terminology sources supply the banned words.', ['The × button removes a source from future checks.', 'Past reviews keep the findings they already recorded.']],
+  memorySource: ['Add a source by hand', 'Give the source a clear title, choose its type and paste the approved text. The type decides how checks use it.', ['Guideline, approved fact and policy: searched for possible evidence behind a claim.', 'Terminology: write “Banned: word, another word” on its own line. Each term is flagged when found.', 'Titles with an owner and date (for example “Voice guide, approved 2026”) keep the library trustworthy.']],
+  memoryUpload: ['Upload a document', 'Choose or drop a file up to 4 MB. PDF, DOCX, TXT, CSV and Markdown files have their text extracted so reviews can use them.', ['Images and scanned PDFs are stored but have no readable text, so checks ignore them.', 'Files are kept in private storage under your account.', 'Guests cannot upload. Create an account to use this.']],
+  review: ['Run a content review', 'Paste the exact text you plan to publish and select where it will appear. Press Analyse to run the first-pass checks.', ['Looks for superlatives (“best-in-class”), absolute promises (“guaranteed”, “never”) and numbers such as “40%”.', 'Flags every banned term from your terminology sources.', 'Links possible evidence from your approved sources. A match is a lead, not proof.', 'Opens the result so you can read each finding.']],
+  findings: ['Reading the findings', 'Each card shows the flagged excerpt, why it matters and what to do next.', ['High: superlatives and guarantees that need strong evidence.', 'Medium: numbers and banned terms.', 'Low: vague promotional wording.', 'Evidence line: whether a source in your library may support the claim.']],
+  revise: ['Edit and re-check', 'Change the draft here and press Save & re-analyse. The checks run again on the new text.', ['Each save creates a new numbered version.', 'Earlier versions stay in the history below.', 'A revised draft goes back to “In review”.']],
+  decision: ['Record a decision', 'Only a person decides. The checks never approve content on their own.', ['Approve: allowed once you have verified the evidence. High-risk findings need an extra confirmation.', 'Request changes or Reject: a reason is required.', 'The decision, who made it and when are written to the audit trail.', 'Nothing is published from here.']],
+  queue: ['Review queue', 'Every review you have run is listed here, newest first. Open one to see its findings, edit the draft or record a decision.', ['Needs review: high-risk findings were detected.', 'In review: waiting for a person.', 'Changes requested, Approved and Rejected show the last decision.']],
+  approvals: ['Approvals', 'This page lists the reviews still waiting for a decision. Open one, check the findings and evidence, then decide.', ['Pending = anything not yet approved or rejected.', 'The “Recently decided” card counts reviews with a final status.']],
+  insights: ['Policy insights', 'These figures are counted from your own reviews, so they stay empty until you run some.', ['Severity bars show how many findings were high, medium or low.', 'Evidence gaps count findings with no matching source in your library.', 'They are rule triggers, so some may be false alarms. Use them to spot unclear guidelines.']],
+  audit: ['Audit trail', 'A dated log of meaningful actions, written automatically.', ['Sources added, uploaded or deleted.', 'Reviews analysed or revised.', 'Decisions with their reasons.', 'Profile name changes.']]
+};
+function explainer(key) {
+  const e = EXPLAIN[key]; if (!e) return '';
+  return `<aside class="explain" aria-label="${escapeHtml(e[0])}"><div class="explain-ico" aria-hidden="true">i</div><div><b>${escapeHtml(e[0])}</b><p>${escapeHtml(e[1])}</p>${e[2]?.length ? `<ul>${e[2].map(p => `<li>${escapeHtml(p)}</li>`).join('')}</ul>` : ''}</div></aside>`;
+}
 function escapeHtml(value = '') {
   return String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -170,13 +191,16 @@ function enterApp() {
   $('#welcome-screen').classList.add('hidden');
   $('#app-shell').classList.remove('hidden');
   $('#auth-modal').classList.add('hidden');
+  window.scrollTo(0, 0);
   renderPage();
 }
 function signOutToWelcome() {
   state.token = null; state.tokenKind = null; state.user = null; state.profile = {}; state.data = { sources: [], reviews: [], audit: [] };
   sessionStorage.removeItem('brandweave_guest_token');
   $('#app-shell').classList.add('hidden'); $('#welcome-screen').classList.remove('hidden');
-  $('#profile-popover').classList.add('hidden');
+  $('#profile-popover').classList.add('hidden'); $('#sidebar').classList.remove('mobile-open');
+  state.page = 'overview'; state.currentReview = null; closeAssistant(); $('#assistant-clear').click();
+  $$('.nav-item').forEach(i => i.classList.toggle('active', i.dataset.page === 'overview')); $('#breadcrumb-current').textContent = 'Overview'; window.scrollTo(0, 0);
   showToast('You have signed out.', 'success');
 }
 
@@ -184,7 +208,7 @@ function pageHeading(title, description, actions = '') {
   return `<div class="page-heading"><div><h1>${title}</h1><p>${description}</p></div><div class="heading-actions">${actions}</div></div>`;
 }
 function emptyState(icon, title, description, action = '', compact = false) {
-  return `<div class="empty-state ${compact ? 'empty-compact' : ''}"><div><div class="empty-icon">${icon}</div><b>${escapeHtml(title)}</b><p>${escapeHtml(description)}</p>${action}</div></div>`;
+  return `<div class="empty-state ${compact ? 'empty-compact' : ''}"><div><div class="empty-illus">${illusForIcon(icon)}</div><b>${escapeHtml(title)}</b><p>${escapeHtml(description)}</p>${action}</div></div>`;
 }
 function statusPill(status) {
   const map = { approved: ['Approved', 'green'], needs_review: ['Needs review', 'red'], in_review: ['In review', 'blue'], changes_requested: ['Changes requested', 'amber'], rejected: ['Rejected', 'red'], active: ['Active', 'green'] };
@@ -200,14 +224,14 @@ function renderOverview() {
   const name = (state.profile.displayName || 'there').split(' ')[0];
   return `
     <div class="page-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span> YOUR GOVERNANCE WORKSPACE</div><h1>Good to have you, ${escapeHtml(name)}.</h1><p>Your brand control centre is ready. Add your organisation’s real knowledge to begin.</p></div><div class="heading-actions"><button class="btn btn-secondary btn-sm" data-feature="assistant">✳ AI command guide</button><button class="btn btn-primary btn-sm" data-nav="review">＋ New content review</button></div></div>
-    <section class="dashboard-hero"><div class="dashboard-hero-copy"><div class="eyebrow"><span class="eyebrow-line"></span> BRAND TRUST, BUILT INTO THE WORKFLOW</div><h2>One source of truth. Every story on-brand.</h2><p>Bring your approved knowledge together, then make every review explainable and accountable.</p><div class="hero-actions"><button class="btn btn-primary btn-sm" data-nav="memory">Build brand memory <span>→</span></button><button class="hero-secondary" data-nav="review">Review content</button></div></div><div class="hero-decoration"><div class="hero-ring"><span>✳</span></div><i class="hero-orbit-dot"></i></div></section>
+    <section class="dashboard-hero"><div class="dashboard-hero-copy"><div class="eyebrow"><span class="eyebrow-line"></span> BRAND TRUST, BUILT INTO THE WORKFLOW</div><h2>One source of truth. Every story on-brand.</h2><p>Bring your approved knowledge together, then make every review explainable and accountable.</p><div class="hero-actions"><button class="btn btn-primary btn-sm" data-nav="memory">Build brand memory <span>→</span></button><button class="hero-secondary" data-nav="review">Review content</button></div></div><div class="hero-decoration">${illus('hero')}</div></section>
     <section class="stats-grid">
       <div class="stat-card"><div class="stat-top"><span>Knowledge sources</span><span class="stat-icon">◈</span></div><div class="stat-value mono">${sources}</div><div class="stat-foot">Actual active sources in this workspace</div></div>
       <div class="stat-card"><div class="stat-top"><span>Content reviews</span><span class="stat-icon">▤</span></div><div class="stat-value mono">${reviews}</div><div class="stat-foot">Submissions analysed so far</div></div>
       <div class="stat-card"><div class="stat-top"><span>Awaiting decision</span><span class="stat-icon">◷</span></div><div class="stat-value mono">${pending}</div><div class="stat-foot">Reviews not yet approved or rejected</div></div>
       <div class="stat-card"><div class="stat-top"><span>Approved</span><span class="stat-icon">✓</span></div><div class="stat-value mono">${approved}</div><div class="stat-foot">Human decisions recorded</div></div>
     </section>
-    <section class="dashboard-grid">
+    ${explainer('overview')}<section class="dashboard-grid">
       <div class="panel"><div class="panel-head"><div><h3>Recent review activity</h3><p>Updates from your actual workspace records</p></div><button class="feature-link" data-nav="reviews">View all →</button></div>
         ${recent.length ? `<div class="record-list">${recent.map(r => `<div class="review-item" data-open-review="${escapeHtml(r.id)}"><div class="record-icon">▤</div><div class="record-info"><b>${escapeHtml(r.title || 'Untitled review')}</b><small>${escapeHtml(r.channel || 'General')} · ${dateLabel(r.updatedAt || r.createdAt)}</small></div>${statusPill(r.status)}<span class="review-open">›</span></div>`).join('')}</div>` : emptyState('▤','No reviews yet','Your real submissions and their findings will appear here once you run your first content review.','<button class="btn btn-primary btn-sm" data-nav="review">Start your first review →</button>',true)}
       </div>
@@ -224,10 +248,10 @@ function renderMemory() {
   const sources = state.data.sources;
   return `${pageHeading('Brand memory','Your organisation’s approved knowledge, organised in one place. Every check should be grounded in material you add.', '<button class="btn btn-secondary btn-sm" data-feature="memory">How it works ↗</button>')}
     <div class="content-grid"><div class="stack">
-      <div class="panel"><div class="panel-head"><div><h3>Knowledge sources</h3><p>${sources.length} actual source${sources.length === 1 ? '' : 's'} · no sample records</p></div><span class="pill pill-blue">SOURCE LIBRARY</span></div>
+      ${explainer('memoryList')}<div class="panel"><div class="panel-head"><div><h3>Knowledge sources</h3><p>${sources.length} actual source${sources.length === 1 ? '' : 's'} · no sample records</p></div><span class="pill pill-blue">SOURCE LIBRARY</span></div>
         ${sources.length ? `<div class="record-list">${sources.map(source => `<div class="record-row"><div class="record-icon">${source.sourceKind === 'file' ? '↥' : '◈'}</div><div class="record-info"><b>${escapeHtml(source.title)}</b><small><span class="source-type">${escapeHtml(source.type.replaceAll('_',' '))}</span> · ${escapeHtml(source.fileName || 'Manual entry')} · ${dateLabel(source.updatedAt || source.createdAt)}</small></div>${statusPill(source.status)}<button class="icon-button" data-delete-source="${escapeHtml(source.id)}" title="Delete source">×</button></div>`).join('')}</div>` : emptyState('◈','Your brand memory is empty','Add an approved guideline, fact, policy or terminology rule. Reviews will not pretend to know your brand until you provide it.','',true)}
       </div>
-      <div class="panel"><div class="panel-head"><div><h3>Add a source manually</h3><p>Enter real, approved information from your organisation.</p></div></div><div class="panel-body form-panel">
+      ${explainer('memorySource')}<div class="panel"><div class="panel-head"><div><h3>Add a source manually</h3><p>Enter real, approved information from your organisation.</p></div></div><div class="panel-body form-panel">
         <form id="source-form" class="stack">
           <div class="field-row"><div class="field"><label for="source-title">Source title</label><input class="field-control" id="source-title" required maxlength="120" placeholder="e.g. Brand voice guidelines — approved 2026" /></div><div class="field"><label for="source-type">Source type</label><select class="field-control select-control" id="source-type"><option value="guideline">Brand guideline</option><option value="approved_fact">Approved fact / claim</option><option value="terminology">Terminology rules</option><option value="policy">Policy / disclaimer</option><option value="other">Other knowledge</option></select></div></div>
           <div class="field"><label for="source-content">Approved content</label><textarea class="field-control" id="source-content" required maxlength="50000" placeholder="Paste the approved source text here. For terminology, use clear lines such as: Banned: cheap, guaranteed\nPreferred: cost-effective, designed to help"></textarea><span class="field-hint">Only add content that your organisation is authorised to use. Avoid confidential personal data.</span></div>
@@ -235,16 +259,16 @@ function renderMemory() {
         </form>
       </div></div>
     </div>
-    <aside class="stack"><div class="panel"><div class="panel-head"><h3>Upload a document</h3><span class="pill pill-blue">SUPABASE STORAGE</span></div><div class="panel-body"><label class="upload-zone" id="upload-zone"><input id="source-file" type="file" accept=".pdf,.docx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp"/><div class="upload-symbol">↥</div><b>Choose a brand document</b><small>PDF, DOCX, TXT, CSV, Markdown or image · Max 4 MB on Vercel</small></label><div class="field" style="margin-top:13px"><label for="upload-type">Classify this source</label><select id="upload-type" class="field-control select-control"><option value="guideline">Brand guideline</option><option value="approved_fact">Approved fact / claim</option><option value="terminology">Terminology rules</option><option value="policy">Policy / disclaimer</option><option value="asset">Visual asset</option><option value="other">Other</option></select></div><p class="field-hint" style="margin:10px 0 0">${state.user?.isGuest ? 'Guest workspaces are temporary. Sign in to store uploaded files securely in Supabase Storage.' : 'Files are stored in your private Supabase Storage workspace. Text extraction is attempted for PDF, DOCX and text files.'}</p></div></div>
+    <aside class="stack">${explainer('memoryUpload')}<div class="panel"><div class="panel-head"><h3>Upload a document</h3><span class="pill pill-blue">SUPABASE STORAGE</span></div><div class="panel-body"><label class="upload-zone" id="upload-zone"><input id="source-file" type="file" accept=".pdf,.docx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp"/><div class="upload-symbol">↥</div><b>Choose a brand document</b><small>PDF, DOCX, TXT, CSV, Markdown or image · Max 4 MB on Vercel</small></label><div class="field" style="margin-top:13px"><label for="upload-type">Classify this source</label><select id="upload-type" class="field-control select-control"><option value="guideline">Brand guideline</option><option value="approved_fact">Approved fact / claim</option><option value="terminology">Terminology rules</option><option value="policy">Policy / disclaimer</option><option value="asset">Visual asset</option><option value="other">Other</option></select></div><p class="field-hint" style="margin:10px 0 0">${state.user?.isGuest ? 'Guest workspaces are temporary. Sign in to store uploaded files securely in Supabase Storage.' : 'Files are stored in your private Supabase Storage workspace. Text extraction is attempted for PDF, DOCX and text files.'}</p></div></div>
       <div class="info-card"><h4>What belongs here?</h4><ul class="bullet-list"><li>Approved product facts and substantiation</li><li>Brand tone, voice and positioning rules</li><li>Preferred and prohibited terminology</li><li>Required disclaimers and approved claims</li><li>Approved logos, assets and usage guidance</li></ul></div>
       <div class="info-card"><h4>Source integrity</h4><p>A source match is a lead for a reviewer, not proof of truth. Add ownership, effective dates and expiry dates to your original source records.</p></div>
     </aside></div>`;
 }
 function renderReviewForm() {
   return `${pageHeading('Content review','Check a draft before it reaches the world. Findings explain what was flagged and what evidence is available.', '<button class="btn btn-secondary btn-sm" data-feature="review">Detailed feature guide ↗</button>')}
-    <div class="content-grid"><div class="panel"><div class="panel-head"><div><h3>Submit content for review</h3><p>Use a real draft from your organisation. Nothing is preloaded.</p></div><span class="pill pill-green">READY</span></div><div class="panel-body form-panel"><form id="review-form" class="stack">
+    ${explainer('review')}<div class="content-grid"><div class="panel"><div class="panel-head"><div><h3>Submit content for review</h3><p>Use a real draft from your organisation. Nothing is preloaded.</p></div><span class="pill pill-green">READY</span></div><div class="panel-body form-panel"><form id="review-form" class="stack">
       <div class="field"><label for="review-title">Review title</label><input id="review-title" class="field-control" maxlength="120" placeholder="e.g. Product launch LinkedIn post" /></div>
-      <div class="field-row"><div class="field"><label for="review-channel">Publishing channel</label><select id="review-channel" class="field-control select-control"><option>Social media</option><option>Website</option><option>Advertising</option><option>Email campaign</option><option>Press release</option><option>Sales collateral</option><option>Other</option></select></div><div class="field"><label>Available knowledge</label><div class="field-control" style="display:flex;align-items:center;justify-content:space-between;color:#a9bbd5"><span>${state.data.sources.length} real source(s)</span><button type="button" class="feature-link" data-nav="memory">Manage ↗</button></div></div></div>
+      <div class="field-row"><div class="field"><label for="review-channel">Publishing channel</label><select id="review-channel" class="field-control select-control"><option>Social media</option><option>Website</option><option>Advertising</option><option>Email campaign</option><option>Press release</option><option>Sales collateral</option><option>Other</option></select></div><div class="field"><label>Available knowledge</label><div class="field-control" style="display:flex;align-items:center;justify-content:space-between;color:var(--muted)"><span>${state.data.sources.length} real source(s)</span><button type="button" class="feature-link" data-nav="memory">Manage ↗</button></div></div></div>
       <div class="field"><label for="review-content">Content to review</label><textarea id="review-content" class="field-control" style="min-height:260px" required minlength="20" maxlength="20000" placeholder="Paste the exact content you want to review…"></textarea><span class="field-hint">20–20,000 characters. The current first pass checks claims, absolute language, quantified promises and terminology rules.</span></div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap"><span class="field-hint">Human review is required before approval.</span><button class="btn btn-primary" id="analyze-button" type="submit">✳ Analyse this content <span>→</span></button></div>
     </form></div></div>
@@ -253,7 +277,7 @@ function renderReviewForm() {
 function renderReviews() {
   const reviews = [...state.data.reviews].sort((a,b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
   return `${pageHeading('Review queue','Every submission, analysis, revision and decision in your workspace.', '<button class="btn btn-primary btn-sm" data-nav="review">＋ New review</button>')}
-    <div class="panel"><div class="panel-head"><div><h3>All reviews</h3><p>${reviews.length} real review record(s)</p></div><span class="pill pill-blue">WORKSPACE RECORDS</span></div>
+    ${explainer('queue')}<div class="panel"><div class="panel-head"><div><h3>All reviews</h3><p>${reviews.length} real review record(s)</p></div><span class="pill pill-blue">WORKSPACE RECORDS</span></div>
     ${reviews.length ? `<div class="record-list">${reviews.map(r => `<div class="review-item" data-open-review="${escapeHtml(r.id)}"><div class="record-icon">▤</div><div class="record-info"><b>${escapeHtml(r.title || 'Untitled review')}</b><small>${escapeHtml(r.channel || 'General')} · ${dateLabel(r.updatedAt || r.createdAt)} · ${Number(r.findings?.length || 0)} finding(s)</small></div>${statusPill(r.status)}<span class="review-open">›</span></div>`).join('')}</div>` : emptyState('▤','No content has been reviewed','Create a real review to see its findings, version history and human decisions here.','<button class="btn btn-primary btn-sm" data-nav="review">Start a content review →</button>')}
     </div>`;
 }
@@ -263,14 +287,14 @@ function renderReviewDetail(review) {
   const latestDecision = (review.decisions || []).at(-1);
   return `${pageHeading(escapeHtml(review.title || 'Review details'),`${escapeHtml(review.channel || 'General')} · Created ${dateLabel(review.createdAt)} · ${versions.length} version(s)`, '<button class="btn btn-secondary btn-sm" data-nav="reviews">← Back to queue</button>')}
     <div class="content-grid"><div class="stack">
-      <div class="panel"><div class="panel-head"><div><h3>Current draft</h3><p>Version ${versions.length || 1} · Use the editor to submit a revised version</p></div>${statusPill(review.status)}</div><div class="panel-body form-panel"><textarea id="revision-content" class="field-control" style="min-height:210px">${escapeHtml(review.content || '')}</textarea><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap"><span class="field-hint">Saving a revision re-runs the available checks and records a new version.</span><button class="btn btn-primary btn-sm" id="save-revision" data-review-id="${escapeHtml(review.id)}">Save & re-analyse →</button></div></div></div>
-      <div class="panel"><div class="panel-head"><div><h3>Review findings</h3><p>${findings.length} signal(s) · ${escapeHtml(review.method || '')}</p></div><button class="feature-link" data-feature="review">How findings work ↗</button></div>
+      ${explainer('revise')}<div class="panel"><div class="panel-head"><div><h3>Current draft</h3><p>Version ${versions.length || 1} · Use the editor to submit a revised version</p></div>${statusPill(review.status)}</div><div class="panel-body form-panel"><textarea id="revision-content" class="field-control" style="min-height:210px">${escapeHtml(review.content || '')}</textarea><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap"><span class="field-hint">Saving a revision re-runs the available checks and records a new version.</span><button class="btn btn-primary btn-sm" id="save-revision" data-review-id="${escapeHtml(review.id)}">Save & re-analyse →</button></div></div></div>
+      ${explainer('findings')}<div class="panel"><div class="panel-head"><div><h3>Review findings</h3><p>${findings.length} signal(s) · ${escapeHtml(review.method || '')}</p></div><button class="feature-link" data-feature="review">How findings work ↗</button></div>
         ${findings.length ? findings.map(f => `<div class="review-finding"><div class="finding-top"><b>${escapeHtml(f.title)}</b><span class="pill pill-${f.severity === 'high' ? 'red' : f.severity === 'medium' ? 'amber' : 'neutral'}">${escapeHtml(f.severity.toUpperCase())}</span><span class="tag">${escapeHtml(f.category)}</span></div><div class="finding-excerpt">${escapeHtml(f.excerpt)}</div><p>${escapeHtml(f.explanation)}</p><p><b>Suggested next step:</b> ${escapeHtml(f.recommendation)}</p><div class="finding-evidence">${f.evidenceStatus === 'not_found' ? '◇ No approved source match found' : f.evidenceStatus === 'possible_match' ? '↗ Possible source match — reviewer verification required' : '↗ Restricted term matched to source'}${f.evidence?.length ? ` · ${f.evidence.map(e => escapeHtml(e.title)).join(', ')}` : ''}</div></div>`).join('') : emptyState('✓','No rule signals found','No configured first-pass rules were triggered. This does not prove that the content is fully on-brand.', '', true)}
       </div>
       <div class="panel"><div class="panel-head"><h3>Version history</h3><span class="pill pill-neutral">${versions.length} VERSION(S)</span></div><div class="panel-body">${versions.length ? versions.map(v => `<div class="version-block"><div class="review-meta"><b style="font-size:10px">Version ${v.version}</b><span class="tag">${escapeHtml(v.label || 'Saved version')}</span><span class="field-hint">${dateLabel(v.createdAt)}</span></div><pre>${escapeHtml((v.content || '').slice(0,900))}${(v.content || '').length > 900 ? '…' : ''}</pre></div>`).join('') : emptyState('◷','No versions yet','Revisions will appear here.', '', true)}</div></div>
     </div><aside class="stack">
       <div class="panel"><div class="panel-head"><h3>Decision summary</h3></div><div class="panel-body"><div class="stats-grid" style="grid-template-columns:repeat(2,1fr);margin:0"><div class="stat-card"><div class="stat-top">High</div><div class="stat-value">${review.summary?.high || 0}</div></div><div class="stat-card"><div class="stat-top">Medium</div><div class="stat-value">${review.summary?.medium || 0}</div></div><div class="stat-card"><div class="stat-top">Low</div><div class="stat-value">${review.summary?.low || 0}</div></div><div class="stat-card"><div class="stat-top">Total</div><div class="stat-value">${review.summary?.total || findings.length}</div></div></div><p class="field-hint" style="margin:12px 0 0">${escapeHtml(review.summary?.coverage || 'Evidence coverage not available.')}</p></div></div>
-      <div class="info-card"><h4>Human decision</h4><p>AI or deterministic checks do not approve content. An authorised person must inspect the source and risk before making a decision.</p><div class="stack" style="margin-top:13px"><button class="btn btn-primary btn-sm" data-decision="approve" data-review-id="${escapeHtml(review.id)}">✓ Approve after verification</button><button class="btn btn-secondary btn-sm" data-decision="request_changes" data-review-id="${escapeHtml(review.id)}">Request changes</button><button class="btn btn-secondary btn-sm" data-decision="reject" data-review-id="${escapeHtml(review.id)}">Reject submission</button></div></div>
+      ${explainer('decision')}<div class="info-card"><h4>Human decision</h4><p>AI or deterministic checks do not approve content. An authorised person must inspect the source and risk before making a decision.</p><div class="stack" style="margin-top:13px"><button class="btn btn-primary btn-sm" data-decision="approve" data-review-id="${escapeHtml(review.id)}">✓ Approve after verification</button><button class="btn btn-secondary btn-sm" data-decision="request_changes" data-review-id="${escapeHtml(review.id)}">Request changes</button><button class="btn btn-secondary btn-sm" data-decision="reject" data-review-id="${escapeHtml(review.id)}">Reject submission</button></div></div>
       ${latestDecision ? `<div class="info-card"><h4>Latest decision</h4><div style="margin:6px 0">${statusPill(latestDecision.action === 'approve' ? 'approved' : latestDecision.action === 'reject' ? 'rejected' : 'changes_requested')}</div><p>${escapeHtml(latestDecision.reason || 'No reason supplied.')}</p><div class="field-hint" style="margin-top:8px">${escapeHtml(latestDecision.actor || 'Reviewer')} · ${dateLabel(latestDecision.createdAt)}</div></div>` : ''}
       <div class="info-card"><h4>Analysis limitations</h4><ul class="bullet-list">${(review.limitations || []).map(item => `<li>${escapeHtml(item)}</li>`).join('') || '<li>Human verification remains required.</li>'}</ul></div>
     </aside></div>`;
@@ -279,7 +303,7 @@ function renderApprovals() {
   const pending = state.data.reviews.filter(r => !['approved','rejected'].includes(r.status));
   const decided = state.data.reviews.filter(r => ['approved','rejected'].includes(r.status));
   return `${pageHeading('Approvals','Make accountable decisions after checking the content, findings and supporting sources.', '<button class="btn btn-secondary btn-sm" data-feature="approvals">Approval policy ↗</button>')}
-    <div class="content-grid"><div class="panel"><div class="panel-head"><div><h3>Waiting for a decision</h3><p>${pending.length} review(s) need attention</p></div><span class="pill pill-amber">PENDING</span></div>${pending.length ? `<div class="record-list">${pending.map(r => `<div class="review-item" data-open-review="${escapeHtml(r.id)}"><div class="record-icon">◷</div><div class="record-info"><b>${escapeHtml(r.title || 'Untitled review')}</b><small>${Number(r.findings?.length || 0)} finding(s) · ${dateLabel(r.updatedAt || r.createdAt)}</small></div>${statusPill(r.status)}<span class="review-open">›</span></div>`).join('')}</div>` : emptyState('✓','No pending decisions','New and revised reviews will appear here until an authorised person decides.', '', true)}</div>
+    ${explainer('approvals')}<div class="content-grid"><div class="panel"><div class="panel-head"><div><h3>Waiting for a decision</h3><p>${pending.length} review(s) need attention</p></div><span class="pill pill-amber">PENDING</span></div>${pending.length ? `<div class="record-list">${pending.map(r => `<div class="review-item" data-open-review="${escapeHtml(r.id)}"><div class="record-icon">◷</div><div class="record-info"><b>${escapeHtml(r.title || 'Untitled review')}</b><small>${Number(r.findings?.length || 0)} finding(s) · ${dateLabel(r.updatedAt || r.createdAt)}</small></div>${statusPill(r.status)}<span class="review-open">›</span></div>`).join('')}</div>` : emptyState('✓','No pending decisions','New and revised reviews will appear here until an authorised person decides.', '', true)}</div>
     <aside class="stack"><div class="info-card"><h4>Decision rules</h4><ul class="bullet-list"><li>Check the evidence for factual claims.</li><li>High-risk approvals require an explicit acknowledgement.</li><li>Request changes or reject with a reason.</li><li>Every outcome is recorded in the audit trail.</li><li>Publishing stays outside this MVP.</li></ul></div><div class="info-card"><h4>Recently decided</h4><p>${decided.length} review(s) have a final status in this workspace.</p><button class="feature-link" data-nav="reviews" style="margin-top:9px">Open review history →</button></div></aside></div>`;
 }
 function renderInsights() {
@@ -289,14 +313,14 @@ function renderInsights() {
   const decided = reviews.filter(r => ['approved','rejected','changes_requested'].includes(r.status)).length;
   const noEvidence = allFindings.filter(f => f.evidenceStatus === 'not_found').length;
   return `${pageHeading('Policy insights','Use actual review patterns to identify where guidelines or workflows may need clarification.', '<button class="btn btn-secondary btn-sm" data-feature="insights">Metric methodology ↗</button>')}
-    <section class="stats-grid"><div class="stat-card"><div class="stat-top">Reviews analysed</div><div class="stat-value">${reviews.length}</div><div class="stat-foot">Real records</div></div><div class="stat-card"><div class="stat-top">High-risk signals</div><div class="stat-value">${counts.high}</div><div class="stat-foot">First-pass signals, not confirmed violations</div></div><div class="stat-card"><div class="stat-top">Possible evidence gaps</div><div class="stat-value">${noEvidence}</div><div class="stat-foot">No source match recorded</div></div><div class="stat-card"><div class="stat-top">Decisions recorded</div><div class="stat-value">${decided}</div><div class="stat-foot">Human workflow outcomes</div></div></section>
-    <div class="content-grid"><div class="panel"><div class="panel-head"><div><h3>Finding distribution</h3><p>Severity counts across current review records</p></div></div><div class="panel-body">${reviews.length ? `<div class="stack">${[['High',counts.high,'#e47878'],['Medium',counts.medium,'#e8b05e'],['Low',counts.low,'#7c9acb']].map(([label,count,color]) => `<div><div class="review-meta" style="justify-content:space-between;margin-bottom:7px"><span style="font-size:10px">${label}</span><b style="font-size:10px">${count}</b></div><div style="height:8px;border-radius:10px;background:#22334b;overflow:hidden"><div style="height:100%;width:${allFindings.length ? Math.max(0, count/allFindings.length*100) : 0}%;background:${color};border-radius:10px"></div></div></div>`).join('')}</div><p class="field-hint" style="margin-top:16px">These are rule-trigger counts and may include false positives. Reviewers should confirm usefulness and missed issues before treating them as policy metrics.</p>` : emptyState('⌁','Insights will appear after real reviews','No sample metrics are generated. Submit content to begin building an evidence base.','<button class="btn btn-primary btn-sm" data-nav="review">Create first review →</button>',true)}</div></div>
+    ${explainer('insights')}<section class="stats-grid"><div class="stat-card"><div class="stat-top">Reviews analysed</div><div class="stat-value">${reviews.length}</div><div class="stat-foot">Real records</div></div><div class="stat-card"><div class="stat-top">High-risk signals</div><div class="stat-value">${counts.high}</div><div class="stat-foot">First-pass signals, not confirmed violations</div></div><div class="stat-card"><div class="stat-top">Possible evidence gaps</div><div class="stat-value">${noEvidence}</div><div class="stat-foot">No source match recorded</div></div><div class="stat-card"><div class="stat-top">Decisions recorded</div><div class="stat-value">${decided}</div><div class="stat-foot">Human workflow outcomes</div></div></section>
+    <div class="content-grid"><div class="panel"><div class="panel-head"><div><h3>Finding distribution</h3><p>Severity counts across current review records</p></div></div><div class="panel-body">${reviews.length ? `<div class="stack">${[['High',counts.high,'var(--bad)'],['Medium',counts.medium,'var(--warn)'],['Low',counts.low,'var(--olive)']].map(([label,count,color]) => `<div><div class="review-meta" style="justify-content:space-between;margin-bottom:7px"><span style="font-size:10px">${label}</span><b style="font-size:10px">${count}</b></div><div style="height:8px;border-radius:10px;background:var(--bar);overflow:hidden"><div style="height:100%;width:${allFindings.length ? Math.max(0, count/allFindings.length*100) : 0}%;background:${color};border-radius:10px"></div></div></div>`).join('')}</div><p class="field-hint" style="margin-top:16px">These are rule-trigger counts and may include false positives. Reviewers should confirm usefulness and missed issues before treating them as policy metrics.</p>` : emptyState('⌁','Insights will appear after real reviews','No sample metrics are generated. Submit content to begin building an evidence base.','<button class="btn btn-primary btn-sm" data-nav="review">Create first review →</button>',true)}</div></div>
     <aside class="stack"><div class="info-card"><h4>Guideline clarity loop</h4><p>Repeated flags and reviewer overrides can reveal unclear policy language. This first release stores the evidence needed for future pattern analysis; it does not claim trend intelligence with an empty or small dataset.</p></div><div class="info-card"><h4>What to measure next</h4><ul class="bullet-list"><li>Reviewer-confirmed useful flags vs false positives</li><li>Time from submission to decision</li><li>Suggestion acceptance without intent loss</li><li>Recurring overrides by policy section</li><li>Approved-source freshness and coverage</li></ul></div></aside></div>`;
 }
 function renderAudit() {
   const entries = [...state.data.audit].sort((a,b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   return `${pageHeading('Audit trail','A traceable history of meaningful workspace actions, changes and human decisions.', '<button class="btn btn-secondary btn-sm" data-feature="audit">Audit design ↗</button>')}
-    <div class="panel"><div class="panel-head"><div><h3>Activity history</h3><p>${entries.length} activity record(s) · no generated entries</p></div><span class="pill pill-blue">ACTIVITY LOG</span></div>
+    ${explainer('audit')}<div class="panel"><div class="panel-head"><div><h3>Activity history</h3><p>${entries.length} activity record(s) · no generated entries</p></div><span class="pill pill-blue">ACTIVITY LOG</span></div>
     ${entries.length ? `<div class="record-list">${entries.map(entry => `<div class="record-row"><div class="record-icon">◷</div><div class="record-info"><b>${escapeHtml((entry.action || 'Activity').replaceAll('.',' ').replaceAll('_',' '))}</b><small>${escapeHtml(entry.actor || 'Workspace member')} · ${dateLabel(entry.createdAt)}</small></div><span class="field-hint">${escapeHtml(Object.entries(entry.details || {}).map(([k,v]) => `${k}: ${String(v)}`).join(' · ').slice(0,110))}</span></div>`).join('')}</div>` : emptyState('◷','No activity recorded yet','Actions such as adding sources, analysing drafts, revising content and recording decisions will appear here.')}
     </div>`;
 }
@@ -501,7 +525,20 @@ function runSearch(query) {
 // Global event delegation
 $('#welcome-guest').addEventListener('click', startGuest);
 $('#welcome-google').addEventListener('click', handleGoogleSignIn);
-$('#welcome-email').addEventListener('click', () => openAuth('signin'));
+$$('[data-open-auth]').forEach(b => b.addEventListener('click', () => openAuth(b.dataset.openAuth)));
+$$('[data-theme-toggle]').forEach(b => b.addEventListener('click', toggleTheme));
+document.addEventListener('click', event => {
+  if (event.target.closest('[data-start-tour]')) beginTour();
+  if (!event.target.closest('#profile-popover, #profile-menu-button')) $('#profile-popover').classList.add('hidden');
+  if (!event.target.closest('#sidebar, #mobile-menu')) $('#sidebar').classList.remove('mobile-open');
+});
+// Search results live in the modal, outside #page-content, so they need their own handler.
+$('#global-search-results').addEventListener('click', async event => {
+  const nav = event.target.closest('[data-nav]'); const open = event.target.closest('[data-open-review]');
+  if (!nav && !open) return;
+  hideModal('#search-modal');
+  if (nav) setPage(nav.dataset.nav); else await openReview(open.dataset.openReview);
+});
 $('#auth-google').addEventListener('click', handleGoogleSignIn);
 $('#auth-form').addEventListener('submit', handleAuthSubmit);
 $$('[data-auth-mode]').forEach(tab => tab.addEventListener('click', () => { state.authMode = tab.dataset.authMode; updateAuthMode(); }));
@@ -517,9 +554,9 @@ $('#floating-ai').addEventListener('click', openAssistant);
 $('#assistant-close').addEventListener('click', closeAssistant);
 $('#assistant-send').addEventListener('click', sendAssistantMessage);
 $('#assistant-input').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendAssistantMessage(); } });
-$('#assistant-clear').addEventListener('click', () => { $('#assistant-messages').innerHTML = `<div class="assistant-welcome"><div class="assistant-welcome-icon">✳</div><h3>What can I help you do?</h3><p>Ask me to navigate your workspace, prepare changes or explain your review workflow. I’ll ask before applying changes.</p></div><div class="prompt-chips"><button data-prompt="Show my pending reviews">Show pending reviews <span>↗</span></button><button data-prompt="Open brand memory">Open brand memory <span>↗</span></button><button data-prompt="How does evidence-linked review work?">Explain evidence review <span>↗</span></button></div>`; });
+$('#assistant-clear').addEventListener('click', () => { $('#assistant-messages').innerHTML = `<div class="assistant-welcome"><div class="assistant-welcome-icon">✳</div><h3>What can I help you do?</h3><p>Ask me to navigate your workspace, prepare changes or explain your review workflow. I’ll ask before applying changes. Try “Open brand memory”, “change my name to …”, “review this content: …” or “add a terminology rule titled Tone: Banned: cheap”. Every change shows a preview and waits for your confirmation.</p></div><div class="prompt-chips"><button data-prompt="Show my pending reviews">Show pending reviews <span>↗</span></button><button data-prompt="Open brand memory">Open brand memory <span>↗</span></button><button data-prompt="How does evidence-linked review work?">Explain evidence review <span>↗</span></button></div>`; });
 $('#profile-menu-button').addEventListener('click', () => $('#profile-popover').classList.toggle('hidden'));
-$('#help-open').addEventListener('click', () => showFeature('assistant'));
+$('#help-open').addEventListener('click', beginTour);
 $('#topbar-search').addEventListener('click', openSearch);
 $('#global-search-input').addEventListener('input', e => runSearch(e.target.value));
 $('#notification-button').addEventListener('click', () => showToast('You’re all caught up.', 'info', 'Notifications will appear here when real workflow events are enabled.'));
@@ -549,7 +586,7 @@ $('#profile-popover').addEventListener('click', async event => {
   const action = event.target.closest('[data-profile-action]')?.dataset.profileAction; if (!action) return;
   $('#profile-popover').classList.add('hidden');
   if (action === 'profile') profileEdit();
-  if (action === 'account') showFeature('assistant');
+  if (action === 'account') showToast('Sign-in security is managed by your sign-in provider.', 'info', 'Change your password or Google security settings there.');
   if (action === 'signout') {
     if (!window.confirm('Sign out of this BrandWeave session?')) return;
     try { await signOutFirebase(); } catch {}
@@ -558,9 +595,25 @@ $('#profile-popover').addEventListener('click', async event => {
 });
 window.addEventListener('keydown', event => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openAssistant(); }
-  if (event.key === 'Escape') { hideModal('#search-modal'); hideModal('#feature-modal'); hideModal('#confirm-modal'); hideModal('#auth-modal'); closeAssistant(); }
+  if (event.key === 'Escape') { hideModal('#search-modal'); hideModal('#feature-modal'); hideModal('#confirm-modal'); hideModal('#auth-modal'); closeAssistant(); $('#sidebar').classList.remove('mobile-open'); }
 });
 
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('bw-theme', next); } catch {}
+  $('meta[name="theme-color"]')?.setAttribute('content', next === 'dark' ? '#24211E' : '#FAF8F3');
+}
+function beginTour() {
+  const inApp = !$('#app-shell').classList.contains('hidden');
+  const ctx = {
+    goTo: setPage,
+    openGuest: async () => { await startGuest(); if (!$('#app-shell').classList.contains('hidden')) setTimeout(() => startTour('app', ctx), 400); }
+  };
+  startTour(inApp ? 'app' : 'landing', ctx);
+}
+$$('[data-illus]').forEach(node => { node.innerHTML = illus(node.dataset.illus); });
+$('#hero-illus').innerHTML = illus('hero');
 async function boot() {
   try {
     const result = await initializeFirebaseClient();

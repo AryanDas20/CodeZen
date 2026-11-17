@@ -61,3 +61,22 @@ the BrandWeave page and the Google sign-in popup, so Firebase immediately sees t
 
 **Known limitation (not changed).** Guest workspaces are kept in server memory. On Vercel each request can run on a
 different instance, so guest data can disappear. Signed-in accounts store data in Supabase and are not affected.
+
+
+## Design and usability update
+
+- New palette (brown #675647, tan #E3BD90, sand #DFD3B5, grey #C0BDBC, olive #6C6E36, charcoal #3B3B3B) in `public/theme.css`, with a light and a dark mode. The choice is saved in `localStorage` and `public/theme.js` applies it before first paint.
+- Website guide tour (`public/tour.js`): a landing-page tour and a full in-app tour that opens each page and spotlights the feature.
+- A plain-language explanation panel beside every function (Brand memory, Review, Findings, Decision, Queue, Approvals, Insights, Audit).
+- Larger Log in / Sign up buttons on the first page; Sign up now opens the create-account form directly.
+- SVG illustrations (`public/illustrations.js`) on the landing page, dashboard and empty states.
+
+### Bugs fixed
+- Search results did nothing when clicked.
+- The assistant sent pasted content to a page instead of reviewing it when the text contained words such as "audit" or "sources" (command order fixed on the server).
+- Percentages (`40%`, `100%`) and `#1` were never flagged because `\b` does not work after a symbol. Terminology rules with symbols had the same problem.
+- Signing out left the old page, assistant chat and sidebar state behind.
+- Profile menu and mobile sidebar did not close on outside click or Esc.
+- Help button and "Account & security" opened the wrong dialog.
+- Profile rename through the assistant could crash when Firebase Admin was not configured; a missing Supabase setup now returns a clear 503 message instead of a generic error.
+- Text as small as 8 px was raised to a readable size and colours were checked for contrast in both modes.
