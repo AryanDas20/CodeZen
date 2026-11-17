@@ -30,3 +30,34 @@ Never commit `.env`, a service-account JSON file, or Supabase secret keys.
 ## Vercel API routing fix
 
 The root `index.js` now creates an Express application directly and mounts the existing BrandWeave server app. This makes the root entrypoint follow Vercel's Express detection contract. The backend already defines `/api/config` and `/api/health`; a 404 for those paths indicates the deployment was not routing requests to the Express app. After deploying this update, confirm the Vercel Root Directory is `./` and allow Express framework detection.
+
+
+## Google sign-in fix (auth/popup-closed-by-user) and auth hardening
+
+**Root cause.** Helmet 8 sends `Cross-Origin-Opener-Policy: same-origin` by default. That header cuts the link between
+the BrandWeave page and the Google sign-in popup, so Firebase immediately sees the popup as "closed" and reports
+`auth/popup-closed-by-user` even though the user never closed it. The earlier CSP change was needed (it removed
+`auth/internal-error`) but was a different problem. `server/index.js` now sends
+`Cross-Origin-Opener-Policy: same-origin-allow-popups`.
+
+**Other fixes**
+- `public/firebase-client.js`: only one Google popup at a time (two buttons used to open two); readable messages for
+  Firebase error codes; `getFreshIdToken()` helper; display-name failures no longer break sign-up.
+- `public/app.js`:
+  - Firebase ID tokens expire after about 1 hour and were never refreshed, so every API call failed with 401 after an hour.
+    Requests now ask the SDK for the current token and retry once on 401.
+  - The sign-in button and the auth listener both loaded the workspace after login (double load). They now share one
+    in-flight promise.
+  - The email sign-in button stayed stuck on "Connecting…" after a successful login; it is now always reset.
+  - After email sign-up the token is refreshed so it contains the display name; the listener no longer races the sign-up.
+  - Display-name changes refresh the token so the new name shows after a reload.
+  - Guest start now reports server errors instead of failing silently.
+- `server/index.js`:
+  - `trust proxy` enabled for Vercel (rate limiting was keyed to Vercel's proxy IP, not the visitor).
+  - `GUEST_TOKEN_SECRET` must be 32+ characters in production; the built-in fallback secret is no longer accepted there.
+  - Record IDs are validated as UUIDs (no more Postgres "invalid uuid" errors for bad URLs).
+  - A failed audit-log write no longer turns a successful action into a 500.
+  - `upgrade-insecure-requests` is only sent in production (it breaks plain-http localhost).
+
+**Known limitation (not changed).** Guest workspaces are kept in server memory. On Vercel each request can run on a
+different instance, so guest data can disappear. Signed-in accounts store data in Supabase and are not affected.

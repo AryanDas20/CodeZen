@@ -48,24 +48,78 @@ export async function initializeFirebaseClient() {
 
 export function firebaseAuthConfigured() { return configured; }
 export function getFirebaseAuth() { return auth; }
-export async function signInGoogle() {
-  if (!auth) throw new Error(setupMessage || 'Google sign-in is not configured. Check Firebase configuration and redeploy.');
+
+// Turns Firebase's "Firebase: Error (auth/...)" into something a person can act on.
+const AUTH_MESSAGES = {
+  'auth/popup-blocked': 'Your browser blocked the Google sign-in window. Allow pop-ups for this site and try again.',
+  'auth/popup-closed-by-user': 'The Google sign-in window was closed before sign-in finished. Please try again and complete the Google steps.',
+  'auth/cancelled-popup-request': 'Another sign-in window was already open. Please try once more.',
+  'auth/unauthorized-domain': 'This website address is not in Firebase Authentication > Settings > Authorized domains. Add it there and try again.',
+  'auth/operation-not-allowed': 'This sign-in method is not enabled in the Firebase Console (Authentication > Sign-in method).',
+  'auth/network-request-failed': 'Network error while contacting Firebase. Check your connection and try again.',
+  'auth/internal-error': 'Firebase hit an internal error. If this keeps happening, check the browser console for blocked scripts or frames.',
+  'auth/invalid-email': 'That email address is not valid.',
+  'auth/missing-password': 'Enter your password.',
+  'auth/weak-password': 'Choose a password with at least 6 characters.',
+  'auth/email-already-in-use': 'An account with this email already exists. Sign in instead, or use Google if you registered that way.',
+  'auth/invalid-credential': 'Email or password is incorrect.',
+  'auth/wrong-password': 'Email or password is incorrect.',
+  'auth/user-not-found': 'Email or password is incorrect.',
+  'auth/user-disabled': 'This account has been disabled.',
+  'auth/too-many-requests': 'Too many attempts. Wait a few minutes and try again.',
+  'auth/account-exists-with-different-credential': 'An account already exists with this email using a different sign-in method. Sign in with that method first.'
+};
+
+export function describeAuthError(error) {
+  const code = error?.code || '';
+  if (AUTH_MESSAGES[code]) return AUTH_MESSAGES[code];
+  const raw = String(error?.message || '').trim();
+  return raw || 'Authentication failed. Please try again.';
+}
+export function isAuthCancellation(error) {
+  return ['auth/popup-closed-by-user', 'auth/cancelled-popup-request', 'auth/user-cancelled'].includes(error?.code);
+}
+
+// Only one Google popup may exist at a time. Two buttons (welcome screen and
+// sign-in dialog) used to start two popups, which makes Firebase cancel the first.
+let googleSignInInFlight = null;
+export function signInGoogle() {
+  if (!auth) return Promise.reject(new Error(setupMessage || 'Google sign-in is not configured. Check Firebase configuration and redeploy.'));
+  if (googleSignInInFlight) return googleSignInInFlight;
   const provider = new firebaseModules.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
-  return firebaseModules.signInWithPopup(auth, provider);
+  // signInWithPopup must be called synchronously from the click handler (no await
+  // before it) or browsers treat the popup as unsolicited and block it.
+  googleSignInInFlight = firebaseModules.signInWithPopup(auth, provider)
+    .finally(() => { googleSignInInFlight = null; });
+  return googleSignInInFlight;
 }
+
 export async function signInEmail(email, password) {
   if (!auth) throw new Error(setupMessage || 'Firebase sign-in is not configured.');
   return firebaseModules.signInWithEmailAndPassword(auth, email, password);
 }
+
 export async function createEmailAccount(email, password, displayName) {
   if (!auth) throw new Error(setupMessage || 'Firebase sign-in is not configured.');
   const result = await firebaseModules.createUserWithEmailAndPassword(auth, email, password);
-  await firebaseModules.updateProfile(result.user, { displayName });
+  if (displayName) {
+    try { await firebaseModules.updateProfile(result.user, { displayName }); }
+    catch (error) { console.warn('Could not save display name:', error); }
+  }
   return result;
 }
+
 export async function signOutFirebase() {
   if (auth) await firebaseModules.signOut(auth);
+}
+
+// Firebase ID tokens expire after about one hour. getIdToken() returns the cached
+// token while it is valid and silently refreshes it when it is not.
+export async function getFreshIdToken(forceRefresh = false) {
+  const user = auth?.currentUser;
+  if (!user) return null;
+  return user.getIdToken(forceRefresh);
 }
 
 export function watchAuth(callback) {

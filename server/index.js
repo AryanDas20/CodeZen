@@ -16,7 +16,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
-const guestSecret = process.env.GUEST_TOKEN_SECRET || 'development-only-change-this-secret-please';
+const guestSecretFromEnv = String(process.env.GUEST_TOKEN_SECRET || '').trim();
+const guestSecretStrong = guestSecretFromEnv.length >= 32;
+// A publicly known fallback secret would let anyone forge guest tokens, so it is
+// only used on a local machine. In production, guest sessions are disabled until a
+// real secret (32+ characters) is configured.
+const guestSessionsEnabled = guestSecretStrong || !(process.env.NODE_ENV === 'production' || process.env.VERCEL);
+const guestSecret = guestSecretStrong ? guestSecretFromEnv : 'development-only-change-this-secret-please';
+if (!guestSessionsEnabled) console.warn('GUEST_TOKEN_SECRET is missing or shorter than 32 characters. Guest sessions are disabled.');
 const guestSessions = new Map();
 // Vercel Functions reject request payloads above 4.5 MB; leave room for multipart overhead.
 const MAX_UPLOAD = 4 * 1024 * 1024;
@@ -105,24 +112,35 @@ function initializeFirebase() {
 initializeFirebase();
 
 app.disable('x-powered-by');
+// Vercel sits behind a proxy. Without this, express-rate-limit sees the proxy IP
+// for every visitor (one shared limit) and logs X-Forwarded-For validation errors.
+app.set('trust proxy', 1);
+
+const isProduction = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
 app.use(helmet({
   contentSecurityPolicy: {
+    useDefaults: true,
     directives: {
       defaultSrc: ["'self'"],
-    scriptSrc: [
-  "'self'",
-  "https://www.gstatic.com",
-  "https://apis.google.com"
-],
+      scriptSrc: ["'self'", 'https://www.gstatic.com', 'https://apis.google.com'],
       styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
       fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
       imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
       connectSrc: ["'self'", 'https://*.googleapis.com', 'https://accounts.google.com', 'https://*.firebaseapp.com', 'https://*.firebaseio.com', 'https://*.supabase.co', 'https://*.supabase.in', 'https://www.gstatic.com'],
       objectSrc: ["'none'"],
       frameSrc: ["'self'", 'https://*.firebaseapp.com', 'https://accounts.google.com', 'https://*.google.com'],
-      frameAncestors: ["'none'"]
+      frameAncestors: ["'none'"],
+      // On plain-http localhost this directive makes browsers (notably Safari) refuse
+      // every asset, so only send it in production.
+      upgradeInsecureRequests: isProduction ? [] : null
     }
   },
+  // ROOT CAUSE FIX for "auth/popup-closed-by-user":
+  // Helmet's default is Cross-Origin-Opener-Policy: same-origin. That severs the link
+  // between this page and the Google sign-in popup, so Firebase sees the popup as
+  // "closed" the instant it navigates to accounts.google.com. same-origin-allow-popups
+  // keeps isolation for everything else but lets our own popup talk back to us.
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
   crossOriginEmbedderPolicy: false
 }));
 app.use(express.json({ limit: '1mb' }));
@@ -145,7 +163,7 @@ function signGuest(id, exp) {
   return `guest.${payload}.${signature}`;
 }
 function verifyGuest(token) {
-  if (!token?.startsWith('guest.')) return null;
+  if (!guestSessionsEnabled || !token?.startsWith('guest.')) return null;
   const parts = token.split('.');
   if (parts.length !== 4) return null;
   const [, id, expRaw, signature] = parts;
@@ -198,7 +216,7 @@ async function supabaseRequest(pathname, options = {}) {
   let body = null;
   try { body = raw ? JSON.parse(raw) : null; } catch { body = raw; }
   if (!response.ok) {
-    const message = body?.message || body?.error || body?.hint || `Supabase request failed (${response.status}).`;
+    const message = (typeof body === 'object' && (body?.message || body?.error || body?.hint)) || `Supabase request failed (${response.status}).`;
     const error = new Error(message);
     error.status = response.status >= 500 ? 502 : response.status;
     throw error;
@@ -255,7 +273,9 @@ async function updateRecord(user, name, id, patch) {
   });
   return merged;
 }
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 async function getRecord(user, name, id) {
+  if (!UUID_RE.test(String(id))) return null;
   if (user.isGuest) return guestState(user)[name].find(item => item.id === id) || null;
   const params = new URLSearchParams({ select: 'id,data,created_at,updated_at', id: `eq.${id}`, owner_uid: `eq.${user.uid}`, collection: `eq.${name}`, limit: '1' });
   const rows = await supabaseRequest(`/rest/v1/brandweave_records?${params}`);
@@ -263,6 +283,7 @@ async function getRecord(user, name, id) {
   return row ? { id: row.id, ...row.data, createdAt: row.created_at, updatedAt: row.updated_at } : null;
 }
 async function deleteRecord(user, name, id) {
+  if (!UUID_RE.test(String(id))) return false;
   if (user.isGuest) {
     const list = guestState(user)[name];
     const index = list.findIndex(item => item.id === id);
@@ -290,8 +311,13 @@ async function deleteFromSupabase(pathname) {
 }
 async function audit(user, action, details = {}) {
   const entry = { action, details, actor: user.displayName || user.email || (user.isGuest ? 'Guest' : user.uid), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-  if (user.isGuest) guestState(user).audit.unshift({ id: crypto.randomUUID(), ...entry });
-  else await addRecord(user, 'audit', entry);
+  try {
+    if (user.isGuest) guestState(user).audit.unshift({ id: crypto.randomUUID(), ...entry });
+    else await addRecord(user, 'audit', entry);
+  } catch (error) {
+    // The record the user asked for is already saved; do not report a failure for a log write.
+    console.warn('Audit write failed:', error.message);
+  }
 }
 
 function getFirebaseWebConfig() {
@@ -345,6 +371,7 @@ app.get('/api/config', (_req, res) => {
   });
 });
 app.post('/api/guest/session', (_req, res) => {
+  if (!guestSessionsEnabled) return res.status(503).json({ error: 'Guest sessions are not available: GUEST_TOKEN_SECRET must be set (32+ characters).' });
   const id = crypto.randomUUID();
   const exp = Date.now() + 1000 * 60 * 60 * 12;
   guestSessions.set(id, { sources: [], reviews: [], audit: [], profile: { displayName: 'Guest workspace' } });

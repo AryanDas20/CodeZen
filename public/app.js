@@ -1,12 +1,12 @@
 import {
   initializeFirebaseClient, signInGoogle, signInEmail, createEmailAccount,
-  signOutFirebase, watchAuth
+  signOutFirebase, watchAuth, getFreshIdToken, describeAuthError, isAuthCancellation
 } from './firebase-client.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const state = {
-  token: null, user: null, profile: {}, data: { sources: [], reviews: [], audit: [] },
+  token: null, tokenKind: null, signupInProgress: false, user: null, profile: {}, data: { sources: [], reviews: [], audit: [] },
   page: 'overview', currentReview: null, authMode: 'signin', firebase: null,
   pendingAction: null, agentStatus: null, assistantBusy: false
 };
@@ -63,20 +63,32 @@ function setBusy(button, busy, label = 'Working…') {
   if (busy) { button.dataset.original = button.innerHTML; button.disabled = true; button.innerHTML = label; }
   else { button.disabled = false; if (button.dataset.original) button.innerHTML = button.dataset.original; }
 }
-function api(path, options = {}) {
-  const headers = new Headers(options.headers || {});
-  headers.set('Authorization', `Bearer ${state.token || ''}`);
-  if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
-  return fetch(path, { ...options, headers }).then(async response => {
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const error = new Error(body.error || `Request failed (${response.status}).`);
-      error.status = response.status;
-      error.body = body;
-      throw error;
-    }
-    return body;
-  });
+// Firebase ID tokens expire after about an hour, so a Firebase session asks the SDK
+// for the current token on every request (it refreshes silently when needed).
+async function currentToken(forceRefresh = false) {
+  if (state.tokenKind === 'firebase') {
+    const token = await getFreshIdToken(forceRefresh);
+    if (token) state.token = token;
+  }
+  return state.token || '';
+}
+async function api(path, options = {}) {
+  const send = async (forceRefresh) => {
+    const headers = new Headers(options.headers || {});
+    headers.set('Authorization', `Bearer ${await currentToken(forceRefresh)}`);
+    if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
+    return fetch(path, { ...options, headers });
+  };
+  let response = await send(false);
+  if (response.status === 401 && state.tokenKind === 'firebase') response = await send(true);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(body.error || `Request failed (${response.status}).`);
+    error.status = response.status;
+    error.body = body;
+    throw error;
+  }
+  return body;
 }
 function showModal(selector) { $(selector).classList.remove('hidden'); }
 function hideModal(selector) { $(selector).classList.add('hidden'); }
@@ -127,21 +139,32 @@ async function startGuest() {
   try {
     const existing = sessionStorage.getItem('brandweave_guest_token');
     if (existing) {
-      state.token = existing;
-      try { await loadWorkspace(); enterApp(); return; } catch { sessionStorage.removeItem('brandweave_guest_token'); }
+      state.token = existing; state.tokenKind = 'guest';
+      try { await loadWorkspace(); enterApp(); return; } catch { sessionStorage.removeItem('brandweave_guest_token'); state.token = null; state.tokenKind = null; }
     }
-    const result = await fetch('/api/guest/session', { method: 'POST' }).then(r => r.json());
-    state.token = result.token;
+    const response = await fetch('/api/guest/session', { method: 'POST' });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.token) throw new Error(result.error || 'Could not start a guest session.');
+    state.token = result.token; state.tokenKind = 'guest';
     sessionStorage.setItem('brandweave_guest_token', result.token);
     await loadWorkspace(); enterApp();
-  } catch (error) { showToast(error.message, 'error'); }
+  } catch (error) { state.token = null; state.tokenKind = null; showToast(error.message, 'error'); }
 }
-async function connectFirebaseUser(user) {
-  if (!user) return;
-  state.token = await user.getIdToken(true);
-  sessionStorage.removeItem('brandweave_guest_token');
-  await loadWorkspace();
-  enterApp();
+// The sign-in button AND the Firebase auth listener both report a new login. Sharing
+// one in-flight promise means the workspace is loaded once, not twice.
+let connectingFirebase = null;
+function connectFirebaseUser(user, { forceRefresh = false } = {}) {
+  if (!user) return Promise.resolve();
+  if (connectingFirebase) return connectingFirebase;
+  connectingFirebase = (async () => {
+    state.token = await user.getIdToken(forceRefresh);
+    state.tokenKind = 'firebase';
+    sessionStorage.removeItem('brandweave_guest_token');
+    try { await loadWorkspace(); }
+    catch (error) { state.token = null; state.tokenKind = null; throw error; }
+    enterApp();
+  })().finally(() => { connectingFirebase = null; });
+  return connectingFirebase;
 }
 function enterApp() {
   $('#welcome-screen').classList.add('hidden');
@@ -150,7 +173,7 @@ function enterApp() {
   renderPage();
 }
 function signOutToWelcome() {
-  state.token = null; state.user = null; state.profile = {}; state.data = { sources: [], reviews: [], audit: [] };
+  state.token = null; state.tokenKind = null; state.user = null; state.profile = {}; state.data = { sources: [], reviews: [], audit: [] };
   sessionStorage.removeItem('brandweave_guest_token');
   $('#app-shell').classList.add('hidden'); $('#welcome-screen').classList.remove('hidden');
   $('#profile-popover').classList.add('hidden');
@@ -394,6 +417,7 @@ async function confirmAssistantAction(button) {
   try {
     const result = await api('/api/agent/confirm', { method: 'POST', body: JSON.stringify({ type, payload }) });
     appendChat(result.reply, 'assistant', 'Action completed · audit entry recorded');
+    if (type === 'update_profile' && state.tokenKind === 'firebase') await getFreshIdToken(true).catch(() => {});
     await loadWorkspace();
     if (result.reviewId) { await openReview(result.reviewId); closeAssistant(); }
     else if (result.sourceId) { setPage('memory'); }
@@ -420,23 +444,43 @@ function updateAuthMode() {
 }
 async function handleAuthSubmit(event) {
   event.preventDefault(); const button = $('#auth-submit'); setBusy(button, true, 'Connecting…'); $('#auth-error').textContent = '';
+  const signup = state.authMode === 'signup';
   try {
     const email = $('#auth-email').value.trim(); const password = $('#auth-password').value;
-    const result = state.authMode === 'signup'
+    if (signup) state.signupInProgress = true; // keep the auth listener from loading a half-created profile
+    const result = signup
       ? await createEmailAccount(email, password, $('#auth-name').value.trim())
       : await signInEmail(email, password);
-    await connectFirebaseUser(result.user);
-  } catch (error) { $('#auth-error').textContent = error.message || 'Authentication failed.'; setBusy(button, false); }
+    // After sign-up, force a new token so it carries the display name that was just saved.
+    await connectFirebaseUser(result.user, { forceRefresh: signup });
+    $('#auth-password').value = '';
+  } catch (error) { $('#auth-error').textContent = describeAuthError(error); }
+  finally { state.signupInProgress = false; setBusy(button, false); }
 }
+let googleBusy = false;
 async function handleGoogleSignIn() {
-  try { const result = await signInGoogle(); await connectFirebaseUser(result.user); }
-  catch (error) { showToast(error.message || 'Google sign-in could not be completed.', 'error'); }
+  if (googleBusy) return; // ignore double clicks and the second Google button
+  googleBusy = true;
+  const buttons = [$('#welcome-google'), $('#auth-google')].filter(Boolean);
+  buttons.forEach(b => { b.disabled = true; });
+  try {
+    const result = await signInGoogle();
+    await connectFirebaseUser(result.user);
+  } catch (error) {
+    console.warn('Google sign-in failed:', error?.code || '', error?.message || error);
+    if (isAuthCancellation(error)) showToast('Google sign-in was not completed.', 'info', describeAuthError(error));
+    else showToast(describeAuthError(error), 'error');
+  } finally {
+    googleBusy = false;
+    buttons.forEach(b => { b.disabled = false; });
+  }
 }
 async function profileEdit() {
   const nextName = window.prompt('Enter your display name:', state.profile.displayName || '');
   if (nextName === null || !nextName.trim()) return;
   openConfirmAction('Confirm profile update', 'Your display name will be changed in this workspace.', nextName.trim(), async () => {
     const result = await api('/api/profile', { method: 'PATCH', body: JSON.stringify({ displayName: nextName.trim() }) });
+    if (state.tokenKind === 'firebase') await getFreshIdToken(true).catch(() => {});
     state.profile.displayName = result.displayName; updateProfileDisplay(); hideModal('#confirm-modal'); showToast('Profile updated', 'success');
   });
 }
@@ -524,10 +568,12 @@ async function boot() {
     if (!result.configured) $('#welcome-auth-hint').textContent = `${result.message || 'Firebase setup is incomplete.'} Guest workspace is available in the meantime.`;
     else {
       $('#welcome-auth-hint').textContent = 'Google and email authentication are enabled.';
+      // One listener, registered once. It restores a saved Firebase session after a page
+      // refresh. Logins started by a button are completed by that button's handler; the
+      // shared in-flight promise in connectFirebaseUser prevents a double load.
       watchAuth(async user => {
-        if (user && !state.token) {
-          try { await connectFirebaseUser(user); } catch (error) { showToast(error.message, 'error'); }
-        }
+        if (!user || state.token || state.signupInProgress) return;
+        try { await connectFirebaseUser(user); } catch (error) { showToast(describeAuthError(error), 'error'); }
       });
     }
     const health = await fetch('/api/health').then(r => r.json());
