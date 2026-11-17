@@ -111,8 +111,8 @@ app.use(helmet({
       defaultSrc: ["'self'"],
     scriptSrc: [
   "'self'",
-  'https://www.gstatic.com',
-  'https://apis.google.com'
+  "https://www.gstatic.com",
+  "https://apis.google.com"
 ],
       styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
       fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
