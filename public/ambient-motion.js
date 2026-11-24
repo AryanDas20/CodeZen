@@ -1,6 +1,8 @@
-/* BrandWeave kinetic atmosphere — adaptive particle field + pointer-responsive depth. */
+/* BrandWeave motion layer. Uses the existing olive / sand / stone palette only. */
 (() => {
-  const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+  'use strict';
+
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
   const finePointer = window.matchMedia?.('(pointer: fine)').matches ?? false;
   const world = document.createElement('div');
   world.id = 'ambient-world';
@@ -11,51 +13,60 @@
     <span class="ambient-halo ambient-halo-a"></span>
     <span class="ambient-halo ambient-halo-b"></span>
     <span class="ambient-halo ambient-halo-c"></span>
+    <span class="ambient-cursor-glow"></span>
     <span class="ambient-geometry ambient-diamond"></span>
     <span class="ambient-geometry ambient-ring"></span>
     <span class="ambient-geometry ambient-cross">✳</span>
     <span class="ambient-geometry ambient-orbit"><i></i></span>
-    <span class="ambient-geometry ambient-pill">IDEAS → IMPACT</span>
-    <span class="ambient-geometry ambient-square"></span>`;
+    <span class="ambient-geometry ambient-pill">STRATEGY IN MOTION</span>
+    <span class="ambient-geometry ambient-square"></span>
+    <span class="ambient-geometry ambient-streak"></span>
+    <span class="ambient-scroll-meter"></span>`;
   document.body.prepend(world);
 
   const canvas = world.querySelector('canvas');
-  const ctx = canvas.getContext('2d', { alpha: true, desynchronized: true });
-  if (!ctx) return;
-
+  const ctx = canvas?.getContext('2d', { alpha: true, desynchronized: true });
   let width = 0;
   let height = 0;
   let dpr = 1;
   let particles = [];
-  let raf = 0;
+  let animationFrame = 0;
+  let pointerFrame = 0;
+  let scrollFrame = 0;
   let lastFrame = 0;
   let pointer = { x: -1000, y: -1000, active: false };
   const frameInterval = finePointer ? 1000 / 42 : 1000 / 30;
-  const colors = [
-    [153, 137, 255], // electric lavender
-    [255, 104, 190], // pop pink
-    [102, 220, 211], // aqua
-    [196, 255, 104]  // acid lime
+  const maxLinks = finePointer ? 138 : 104;
+  const palette = [
+    [108, 110, 54],  // olive #6C6E36
+    [227, 189, 144], // sand #E3BD90
+    [223, 211, 181], // stone #DFD3B5
+    [192, 189, 188], // soft grey #C0BDBC
+    [103, 86, 71]    // warm brown #675647
   ];
   const random = (min, max) => min + Math.random() * (max - min);
 
-  function makeParticle() {
-    const color = colors[Math.floor(Math.random() * colors.length)];
+  function createParticle() {
     return {
-      x: random(0, width), y: random(0, height),
-      vx: random(-0.22, 0.22), vy: random(-0.22, 0.22),
-      r: random(0.7, 1.9), phase: random(0, Math.PI * 2),
-      color, alpha: random(0.2, 0.62),
-      pulse: random(0.006, 0.018)
+      x: random(0, width),
+      y: random(0, height),
+      vx: random(-0.17, 0.17),
+      vy: random(-0.17, 0.17),
+      radius: random(0.75, 1.7),
+      phase: random(0, Math.PI * 2),
+      pulse: random(0.005, 0.014),
+      alpha: random(0.18, 0.46),
+      color: palette[Math.floor(Math.random() * palette.length)]
     };
   }
 
   function resize() {
+    if (!canvas || !ctx) return;
     const oldWidth = width || window.innerWidth;
     const oldHeight = height || window.innerHeight;
     width = Math.max(1, window.innerWidth);
     height = Math.max(1, window.innerHeight);
-    dpr = Math.min(window.devicePixelRatio || 1, finePointer ? 1.5 : 1.15);
+    dpr = Math.min(window.devicePixelRatio || 1, finePointer ? 1.45 : 1.1);
     canvas.width = Math.round(width * dpr);
     canvas.height = Math.round(height * dpr);
     canvas.style.width = `${width}px`;
@@ -63,103 +74,108 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const area = width * height;
-    const deviceLimit = (navigator.hardwareConcurrency || 4) <= 4 ? 68 : 104;
-    const targetCount = reduceMotion ? 34 : Math.min(finePointer ? deviceLimit : 44, Math.max(28, Math.floor(area / 14500)));
+    const lowPower = (navigator.hardwareConcurrency || 4) <= 4;
+    const maxCount = finePointer ? (lowPower ? 54 : 78) : 38;
+    const targetCount = reducedMotion ? 26 : Math.min(maxCount, Math.max(24, Math.floor(area / 18500)));
     if (particles.length < targetCount) {
-      for (let i = particles.length; i < targetCount; i++) particles.push(makeParticle());
-    } else if (particles.length > targetCount) particles.length = targetCount;
-    const sx = width / oldWidth;
-    const sy = height / oldHeight;
-    particles.forEach(p => { p.x *= sx; p.y *= sy; });
+      for (let i = particles.length; i < targetCount; i += 1) particles.push(createParticle());
+    } else if (particles.length > targetCount) {
+      particles.length = targetCount;
+    }
+    const scaleX = width / oldWidth;
+    const scaleY = height / oldHeight;
+    particles.forEach(particle => { particle.x *= scaleX; particle.y *= scaleY; });
   }
 
   function draw(now = 0, animate = true) {
+    if (!ctx) return;
     ctx.clearRect(0, 0, width, height);
-    const pulseTime = now * 0.001;
-    const maxDistance = finePointer ? 142 : 112;
+    const time = now * 0.001;
+    const linkDistance = finePointer ? 146 : 112;
+    const linkDistanceSquared = linkDistance * linkDistance;
 
-    for (let i = 0; i < particles.length; i++) {
-      const p = particles[i];
+    for (let i = 0; i < particles.length; i += 1) {
+      const particle = particles[i];
       if (animate) {
-        p.phase += p.pulse;
-        p.x += p.vx;
-        p.y += p.vy;
-        if (p.x < -12) p.x = width + 12;
-        if (p.x > width + 12) p.x = -12;
-        if (p.y < -12) p.y = height + 12;
-        if (p.y > height + 12) p.y = -12;
-        if (pointer.active) {
-          const dx = pointer.x - p.x;
-          const dy = pointer.y - p.y;
+        particle.phase += particle.pulse;
+        particle.x += particle.vx;
+        particle.y += particle.vy;
+        if (particle.x < -10) particle.x = width + 10;
+        if (particle.x > width + 10) particle.x = -10;
+        if (particle.y < -10) particle.y = height + 10;
+        if (particle.y > height + 10) particle.y = -10;
+
+        if (pointer.active && finePointer) {
+          const dx = pointer.x - particle.x;
+          const dy = pointer.y - particle.y;
           const distance = Math.hypot(dx, dy);
-          if (distance > 1 && distance < 150) {
-            const force = (1 - distance / 150) * 0.012;
-            p.vx += (dx / distance) * force;
-            p.vy += (dy / distance) * force;
+          if (distance > 1 && distance < 170) {
+            const force = (1 - distance / 170) * 0.006;
+            particle.vx += (dx / distance) * force;
+            particle.vy += (dy / distance) * force;
           }
         }
-        p.vx *= 0.996;
-        p.vy *= 0.996;
+        particle.vx = Math.max(-0.24, Math.min(0.24, particle.vx * 0.997));
+        particle.vy = Math.max(-0.24, Math.min(0.24, particle.vy * 0.997));
       }
-      const glow = 0.78 + Math.sin(p.phase + pulseTime) * 0.22;
-      const [r, g, b] = p.color;
-      const a = p.alpha * glow;
 
-      // Soft node bloom, kept small to avoid large overdraw.
+      const glow = 0.78 + Math.sin(particle.phase + time) * 0.22;
+      const [red, green, blue] = particle.color;
+      const alpha = particle.alpha * glow;
+
       ctx.beginPath();
-      ctx.fillStyle = `rgba(${r},${g},${b},${a * 0.12})`;
-      ctx.arc(p.x, p.y, p.r * 4.2, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${red},${green},${blue},${alpha * 0.12})`;
+      ctx.arc(particle.x, particle.y, particle.radius * 4.3, 0, Math.PI * 2);
       ctx.fill();
       ctx.beginPath();
-      ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${red},${green},${blue},${alpha})`;
+      ctx.arc(particle.x, particle.y, particle.radius, 0, Math.PI * 2);
       ctx.fill();
 
-      for (let j = i + 1; j < particles.length; j++) {
-        const q = particles[j];
-        const dx = p.x - q.x;
-        const dy = p.y - q.y;
+      for (let j = i + 1; j < particles.length; j += 1) {
+        const other = particles[j];
+        const dx = particle.x - other.x;
+        const dy = particle.y - other.y;
         const distanceSquared = dx * dx + dy * dy;
-        if (distanceSquared < maxDistance * maxDistance) {
-          const distance = Math.sqrt(distanceSquared);
-          const opacity = (1 - distance / maxDistance) * 0.12;
+        if (distanceSquared < linkDistanceSquared) {
+          const opacity = (1 - Math.sqrt(distanceSquared) / linkDistance) * 0.105;
           ctx.beginPath();
-          ctx.strokeStyle = `rgba(157,165,255,${opacity})`;
+          ctx.strokeStyle = `rgba(108,110,54,${opacity})`;
           ctx.lineWidth = 0.65;
-          ctx.moveTo(p.x, p.y);
-          ctx.lineTo(q.x, q.y);
+          ctx.moveTo(particle.x, particle.y);
+          ctx.lineTo(other.x, other.y);
           ctx.stroke();
         }
       }
     }
 
-    // A faint cursor ripple connects the interaction to the ambient network.
     if (pointer.active && finePointer) {
-      const gradient = ctx.createRadialGradient(pointer.x, pointer.y, 0, pointer.x, pointer.y, 190);
-      gradient.addColorStop(0, 'rgba(149,126,255,0.10)');
-      gradient.addColorStop(1, 'rgba(149,126,255,0)');
-      ctx.fillStyle = gradient;
-      ctx.fillRect(pointer.x - 190, pointer.y - 190, 380, 380);
+      const aura = ctx.createRadialGradient(pointer.x, pointer.y, 0, pointer.x, pointer.y, 180);
+      aura.addColorStop(0, 'rgba(227,189,144,0.10)');
+      aura.addColorStop(1, 'rgba(227,189,144,0)');
+      ctx.fillStyle = aura;
+      ctx.fillRect(pointer.x - 180, pointer.y - 180, 360, 360);
     }
   }
 
-  function loop(now) {
-    raf = 0;
+  function animate(now) {
+    animationFrame = 0;
     if (document.hidden) return;
     if (now - lastFrame >= frameInterval) {
       lastFrame = now;
-      draw(now, !reduceMotion);
+      draw(now, !reducedMotion);
     }
-    if (!reduceMotion) raf = requestAnimationFrame(loop);
+    if (!reducedMotion) animationFrame = requestAnimationFrame(animate);
   }
 
   function start() {
-    if (reduceMotion) { draw(0, false); return; }
-    if (!raf && !document.hidden) raf = requestAnimationFrame(loop);
+    if (reducedMotion) { draw(0, false); return; }
+    if (!animationFrame && !document.hidden) animationFrame = requestAnimationFrame(animate);
   }
+
   function stop() {
-    if (raf) cancelAnimationFrame(raf);
-    raf = 0;
+    if (animationFrame) cancelAnimationFrame(animationFrame);
+    animationFrame = 0;
   }
 
   resize();
@@ -167,49 +183,121 @@
   start();
   window.addEventListener('resize', resize, { passive: true });
   document.addEventListener('visibilitychange', () => document.hidden ? stop() : start());
-  if (finePointer && !reduceMotion) {
-    let pointerFrame = 0;
+
+  if (finePointer && !reducedMotion) {
+    const cursorGlow = world.querySelector('.ambient-cursor-glow');
     window.addEventListener('pointermove', event => {
       pointer.x = event.clientX;
       pointer.y = event.clientY;
       pointer.active = true;
-      if (!pointerFrame) pointerFrame = requestAnimationFrame(() => { pointerFrame = 0; });
+      if (!pointerFrame) {
+        pointerFrame = requestAnimationFrame(() => {
+          pointerFrame = 0;
+          cursorGlow.style.transform = `translate3d(${pointer.x}px,${pointer.y}px,0) translate(-50%,-50%)`;
+          cursorGlow.classList.add('is-active');
+        });
+      }
     }, { passive: true });
-    window.addEventListener('pointerleave', () => { pointer.active = false; }, { passive: true });
+    window.addEventListener('pointerout', event => {
+      if (!event.relatedTarget) {
+        pointer.active = false;
+        cursorGlow.classList.remove('is-active');
+      }
+    }, { passive: true });
   }
 
-  // Add lightweight 3D tilt only to compact surfaces, never to form controls.
-  if (finePointer && !reduceMotion) {
-    const selector = '.cap-card,.step-card,.stat-card,.memory-card,.review-card,.insight-card,.dashboard-hero';
-    let activeCard = null;
-    let tiltFrame = 0;
-    document.addEventListener('pointermove', event => {
-      const card = event.target.closest?.(selector);
-      if (activeCard && activeCard !== card) {
-        activeCard.style.removeProperty('--tilt-x');
-        activeCard.style.removeProperty('--tilt-y');
-        activeCard.classList.remove('is-tilting');
+  // Scroll progress is a single transform-only update, throttled to one frame.
+  const scrollMeter = world.querySelector('.ambient-scroll-meter');
+  window.addEventListener('scroll', () => {
+    if (scrollFrame) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = 0;
+      const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+      const progress = Math.max(0, Math.min(1, window.scrollY / maxScroll));
+      scrollMeter.style.transform = `scaleX(${progress})`;
+    });
+  }, { passive: true });
+
+  // Reveal cards only as they enter view; works again when the dashboard rerenders.
+  const revealSelector = [
+    '.lp-hero > *', '.lp-section > *', '.cap-card', '.step-card',
+    '.page-heading', '.dashboard-hero', '.stat-card', '.panel', '.info-card',
+    '.setup-item', '.version-block', '.upload-zone', '.explain', '.review-item'
+  ].join(',');
+  if (!reducedMotion && 'IntersectionObserver' in window) {
+    const revealObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('motion-visible');
+          revealObserver.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.08, rootMargin: '0px 0px -36px 0px' });
+
+    const revealIn = scope => {
+      if (!scope) return;
+      if (scope.nodeType === 1 && scope.matches?.(revealSelector) && !scope.classList.contains('motion-observed')) {
+        scope.classList.add('motion-reveal', 'motion-observed');
+        revealObserver.observe(scope);
       }
+      scope.querySelectorAll?.(revealSelector).forEach((element, index) => {
+        if (element.classList.contains('motion-observed')) return;
+        element.classList.add('motion-reveal', 'motion-observed');
+        element.style.setProperty('--motion-delay', `${Math.min(index % 6, 5) * 65}ms`);
+        revealObserver.observe(element);
+      });
+    };
+
+    revealIn(document);
+    const pageContent = document.getElementById('page-content');
+    if (pageContent) {
+      const contentObserver = new MutationObserver(records => {
+        records.forEach(record => record.addedNodes.forEach(node => {
+          if (node.nodeType === 1) revealIn(node);
+        }));
+      });
+      contentObserver.observe(pageContent, { childList: true, subtree: true });
+    }
+  }
+
+  // Gentle pointer tilt for a few prominent cards. Inputs and interactive controls are excluded.
+  if (finePointer && !reducedMotion) {
+    const tiltSelector = '.cap-card,.step-card,.stat-card,.dashboard-hero';
+    let activeCard = null;
+    let lastPointerEvent = null;
+    let tiltFrame = 0;
+    const resetTilt = card => {
+      if (!card) return;
+      card.style.removeProperty('--motion-rotate-x');
+      card.style.removeProperty('--motion-rotate-y');
+      card.classList.remove('motion-tilting');
+    };
+
+    document.addEventListener('pointermove', event => {
+      const card = event.target.closest?.(tiltSelector);
+      if (activeCard !== card) resetTilt(activeCard);
       activeCard = card;
-      if (!card || tiltFrame) return;
+      if (!card || event.target.closest('button,a,input,textarea,select')) return;
+      lastPointerEvent = event;
+      if (tiltFrame) return;
       tiltFrame = requestAnimationFrame(() => {
         tiltFrame = 0;
-        const rect = card.getBoundingClientRect();
-        const x = (event.clientX - rect.left) / Math.max(rect.width, 1) - 0.5;
-        const y = (event.clientY - rect.top) / Math.max(rect.height, 1) - 0.5;
-        const intensity = card.classList.contains('dashboard-hero') ? 1.5 : 3.2;
-        card.style.setProperty('--tilt-x', `${(x * intensity).toFixed(2)}deg`);
-        card.style.setProperty('--tilt-y', `${(y * intensity).toFixed(2)}deg`);
-        card.classList.add('is-tilting');
+        if (!activeCard || !lastPointerEvent) return;
+        const rect = activeCard.getBoundingClientRect();
+        const x = (lastPointerEvent.clientX - rect.left) / Math.max(rect.width, 1) - 0.5;
+        const y = (lastPointerEvent.clientY - rect.top) / Math.max(rect.height, 1) - 0.5;
+        const strength = activeCard.classList.contains('dashboard-hero') ? 1.2 : 2.4;
+        activeCard.style.setProperty('--motion-rotate-x', `${(x * strength).toFixed(2)}deg`);
+        activeCard.style.setProperty('--motion-rotate-y', `${(-y * strength).toFixed(2)}deg`);
+        activeCard.classList.add('motion-tilting');
       });
     }, { passive: true });
-    document.addEventListener('pointerleave', () => {
-      if (activeCard) {
-        activeCard.style.removeProperty('--tilt-x');
-        activeCard.style.removeProperty('--tilt-y');
-        activeCard.classList.remove('is-tilting');
+
+    document.addEventListener('pointerout', event => {
+      if (activeCard && (!event.relatedTarget || !activeCard.contains(event.relatedTarget))) {
+        resetTilt(activeCard);
         activeCard = null;
       }
-    });
+    }, { passive: true });
   }
 })();
