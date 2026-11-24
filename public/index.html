@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#FAF8F3" />
+  <meta name="theme-color" content="#090816" />
   <meta name="description" content="BrandWeave is an evidence-led brand governance workspace for content teams." />
   <title>BrandWeave — Brand governance, with evidence</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Poppins:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="/theme.js"></script>
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/theme.css" />
+  <link rel="stylesheet" href="/kinetic-design.css" />
 </head>
 <body>
   <div id="motion-progress" aria-hidden="true"><span></span></div>
@@ -26,7 +27,7 @@
       <section class="lp-hero">
         <div class="welcome-copy">
           <div class="eyebrow"><span class="eyebrow-line"></span> The brand trust workspace</div>
-          <h1 id="lp-headline">Keep every story on brand.</h1>
+          <h1 id="lp-headline">Keep every story <span>on brand.</span></h1>
           <p class="lp-lede">One home for your approved brand knowledge, a clear explanation for every flagged claim, and a person who makes the final call.</p>
           <div class="auth-cta" id="auth-cta"><button class="btn btn-primary btn-xl" id="welcome-login" data-open-auth="signin" type="button">Log in</button><button class="btn btn-secondary btn-xl" id="welcome-signup" data-open-auth="signup" type="button">Sign up</button></div>
           <div class="alt-cta"><button class="btn btn-secondary" id="welcome-google" type="button"><span class="google-g">G</span> Continue with Google</button><button class="btn btn-secondary" id="welcome-guest" type="button">Explore as guest</button></div>
@@ -152,6 +153,7 @@
     <div class="search-modal modal-panel"><div class="search-input-wrap"><span>⌕</span><input id="global-search-input" placeholder="Search reviews, sources and workspace…" autocomplete="off"/><kbd>ESC</kbd></div><div id="global-search-results" class="global-search-results"><div class="search-hint">Search your own brand sources and reviews. Nothing is preloaded.</div></div></div>
   </div>
 
+  <script src="/ambient-motion.js" defer></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
